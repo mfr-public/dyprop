@@ -2,7 +2,7 @@ This is the dev github and a work in progress - most of the documentation is now
 
 # DyProp: Dynamic Proportionality Analysis
 
-> **A Unified Framework for Genomic Phase Transitions using Vectorized Singular Perturbation**
+> **A Unified Framework for Genomic Phase Transitions using Vectorized Singular Perturbations**
 
 [![Part of propr ecosystem](https://img.shields.io/badge/part%20of-propr%20ecosystem-blueviolet)](https://github.com/tpq/propr)
 
@@ -12,7 +12,7 @@ This is the dev github and a work in progress - most of the documentation is now
 Traditional trajectory inference often relies on univariate regression or correlation-based networks. However, these methods struggle with the mathematical constraints of **Compositional Data (CoDa)** and often fail to distinguish between a regulated biological transition and a chaotic loss of homeostasis.
 
 ### The Solution
-DyProp moves beyond static correlations by modeling the continuous evolution of gene-gene log-ratios on a quasi-potential landscape. By integrating **Singular Perturbation Theory** with a rigorous **Compositional** framework, it identifies specific "Boundary Functions"—the mathematical signatures of rapid network rewiring.
+**DyProp** moves beyond static correlations by modeling the continuous evolution of gene-gene log-ratios on a quasi-potential landscape. By integrating **Singular Perturbation Theory** with a rigorous **Compositional** framework, it identifies specific "Boundary Functions"—the mathematical signatures of rapid network rewiring.
 
 ### Key Capabilities
 * **Vectorized C++ Engine:** Bypasses slow iterative regression in favor of dense linear algebra, enabling the scanning of $>10^8$ gene pairs in real-time.
