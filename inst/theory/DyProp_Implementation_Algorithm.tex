@@ -1,0 +1,230 @@
+\documentclass[11pt, a4paper]{article}
+
+% --- PREAMBLE ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{listings} % For code blocks
+\usepackage{color}
+\usepackage{xcolor}   % Required for the red citation text
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{amsmath} % Added for math
+\usepackage{amssymb} % Added for math
+
+% Geometry
+\geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm}
+
+% --- HELPER COMMAND FOR PLACEHOLDER REFERENCES ---
+% This command renders your internal [cite: 131] tags as small, 
+% red superscripts so they don't break the document flow or crash LaTeX.
+\newcommand{\tref}[1]{\textsuperscript{\textcolor{red}{[Ref:#1]}}}
+
+% Code styling
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\lstset{frame=tb,
+  language=R,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=3
+}
+
+% Title
+\title{\textbf{Technical Specification: Algorithmic Implementation and Software Architecture of DyProp}}
+\author{DyProp Development Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+The \texttt{dyprop} package is an R/Bioconductor extension of the \texttt{propr} ecosystem. It implements the mathematical framework of Dynamic Proportionality using a high-performance C++ backend for vectorized template matching and an R frontend for S4 class management, event classification, and hierarchical validation.
+
+\section{Data Transformation Pipeline}
+
+\subsection{Zero Handling Protocol}
+To enable log-ratio analysis on sparse genomic data without masking biological signals (e.g., gene silencing), we implement a rigorous two-step imputation strategy\tref{140, 141}.
+
+\begin{enumerate}
+    \item \textbf{Step A: Technical Correction (kNN Smoothing)}
+    \begin{itemize}
+        \item \textbf{Objective:} To correct technical dropouts (sporadic zeros) based on manifold proximity.
+        \item \textbf{Implementation:} To avoid circularity (library-size bias), we cannot perform standard PCA on raw counts with zeros. We utilize \textbf{GLM-PCA} (Generalized Linear Model PCA) or perform a temporary $\log(x+1)$ transform solely to calculate the Euclidean distance matrix. 
+    \item \textbf{Logic:} We identify the $K=5$ nearest neighbors in this corrected space, but perform the pooling on the \textbf{raw counts} to preserve the integer nature required for CoDa imputation.
+    \end{itemize}
+    
+    \item \textbf{Step B: Biological Imputation (Bayesian)}
+    \begin{itemize}
+        \item \textbf{Objective:} To allow log-ratios involving Biological Zeros (e.g., silenced genes) to be computed\tref{145}.
+        \item \textbf{Implementation:} We utilize the \texttt{zCompositions::cmultRepl} function (Count Zero Multiplicative Replacement)\tref{146}.
+        \item \textbf{Logic:} Zeros are replaced by a probabilistic estimate $\delta$ derived from the limit of detection, ensuring that an ``On/Off'' switch is detected as a large, quantifiable change in the log-ratio, rather than a missing value\tref{147, 148}.
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Coordinate Projection \& Ratio-First Robustness}
+Following imputation, the data matrix $\mathbf{X}$ is projected into Euclidean space using the Centered Log-Ratio (CLR) transformation\tref{378}. To ensure robustness against outliers (e.g., PCR artifacts) without violating Aitchison geometry, we apply Winsorization at the ratio level:
+
+\begin{lstlisting}
+# R Pseudo-code
+# 1. Full CLR Transform (Preserves Subcompositional Coherence)
+clr_matrix <- propr::propr(imputed_counts)@logratio
+
+# 2. Robust Ratio Calculation (e.g., Gene A vs Gene B)
+ratio_vector <- clr_matrix[, A] - clr_matrix[, B]
+clean_vector <- winsorize(ratio_vector, probs = c(0.01, 0.99))
+\end{lstlisting}
+
+\section{Algorithmic Engine: The Vectorized Scanner}
+
+\subsection{Phase 1: Just-In-Time Dictionary Generation}
+To bypass the computational intractability of iterative regression for $>10^8$ pairs, we pre-compute a dictionary of archetypal Boundary Functions\tref{379}. Upon initialization, the C++ backend generates a template matrix $\mathcal{M}$ ($K_{archetypes} \times T$) dynamically to match the user's pseudotime resolution. The grid resolution is strictly coupled to the detection limit via the Nyquist criterion ($\Delta\tau \le \epsilon_{min}$)\tref{380}.
+
+\subsection{Phase 2: Block-Wise Vectorized Scanner (C++ / OpenMP)}
+We perform a global search for topological tipping points using dense linear algebra. To prevent memory overflow (storing $10^8$ pairs is infeasible), we implement a \textbf{Map-Reduce} architecture with OpenMP parallelization.
+
+\begin{enumerate}
+    \item \textbf{Chunking:} The gene matrix is processed in blocks (e.g., $B=1000$ genes).
+    \item \textbf{Stream Processing:} For each block, we compute the $\binom{B}{2}$ log-ratio trajectories on the fly.
+    \item \textbf{Standardization:} Trajectories are Z-scored in-place. Crucially, to ensure the matrix product yields Pearson Correlation coefficients (Cosine Similarity), both $\mathbf{Y}$ and $\mathcal{M}$ are \textbf{row-wise centered and scaled} prior to multiplication.
+    \item \textbf{Filtering:} We retain \textit{only} the top $0.1\%$ of pairs (based on fit score $R$) and discard the raw trajectory data from memory.
+    \item \textbf{Operation:} We compute the convolution via matrix multiplication using \texttt{RcppArmadillo}.
+\end{enumerate}
+
+\begin{lstlisting}[language=C++]
+// src/dyprop.cpp (Memory-Safe Block Scanner)
+#include <RcppArmadillo.h>
+// [[Rcpp::depends(RcppArmadillo)]]
+
+// Uses OpenMP for parallel chunk processing
+arma::mat scan_block(arma::mat Y_chunk, arma::mat M_t) {
+    // Y_chunk: [Pairs x Time]
+    // M_t: [Time x Archetypes] (Transposed Template)
+
+    // 1. Row-wise Z-Score (In-place)
+    // Ensures dot product == Pearson Correlation
+    Y_chunk.each_row([](arma::rowvec& r) { 
+        r = (r - arma::mean(r)) / arma::stddev(r); 
+    });
+
+    // 2. Dense Matrix Multiplication
+    arma::mat scores = Y_chunk * M_t; 
+    
+    return scores;
+}
+\end{lstlisting}
+
+\subsection{Phase 3: Quadratic Interpolation}
+To recover continuous parameter estimates from the discrete grid, we apply Parabolic Interpolation\tref{386}.
+\begin{itemize}
+    \item \textbf{Logic:} Given the best matching template index $i$, we fit a local parabola to scores $(R_{i-1}, R_i, R_{i+1})$.
+    \item \textbf{Output:} The vertex of the parabola yields the precise continuous Tipping Point $\hat{\tau}$ and Sharpness $\hat{\epsilon}$\tref{387}.
+\end{itemize}
+
+\subsection{Phase 3.5: The Empirical Null Model (FDR)}
+To assign statistical significance to the template match scores ($R$) without the prohibitive cost of permuting $10^8$ pairs:
+\begin{enumerate}
+    \item We permute the cell labels (pseudotime) once to destroy biological signal.
+    \item We run the Vectorized Scanner on a random subset of $10,000$ pairs to generate a null distribution of correlation scores $R_{null}$.
+    \item Empirical $p$-values for real scores $R_{obs}$ are calculated relative to this null distribution.
+\end{enumerate}
+
+\noindent\subsection{Adaptive Bandwidth Selection}
+The kernel width $h$ is automated based on the dynamic range of the pseudotime coordinate:
+$$ h_{opt} = 0.05 \times (\max(t) - \min(t)) $$
+
+\noindent\section{Software Architecture}
+\subsection{Class Structure}
+We define the \texttt{dyprop} S4 class to manage the complex outputs of dynamic analysis\tref{159}.
+
+\begin{lstlisting}
+setClass("dyprop",
+    contains = "propr",       # Inherits basic CoDa slots from parent package
+    slots = c(
+        pseudotime = "numeric", 
+        design = "matrix",
+        
+        # MEMORY EFFICIENT STORAGE (Lazy Evaluation)
+        # We replace dense 3D arrays with a sparse catalog.
+        # Stores only significant events (FDR < 0.05).
+        events = "data.frame",  # Cols: GeneA, GeneB, Type, Tau, Epsilon, Score, FDR
+        
+        # Lazy Evaluation Cache
+        # Stores computed trajectories only for requested plots (LRU Cache)
+        metric_cache = "environment", 
+        
+        # Validation
+        networks = "list",      
+        glmm_fits = "list",
+        dictionary_meta = "list"
+    )
+)
+\end{lstlisting}
+
+\subsection{Core Methods}
+\begin{description}
+    \item[\texttt{prepareComposition(counts)}] Wrapper for the kNN + Imputation workflow. Returns clean CLR matrix\tref{161}.
+    \item[\texttt{scanDynamics(object)}] Calls the C++ backend. Populates the \texttt{events} catalog, and performs the Template Match\tref{162} based on Vectorized Z-Score Matching.
+    \item[\texttt{classifyEvents(object)}] \textbf{Lazy Evaluation Step.} Computes the expensive kernel-weighted metrics ($\Phi, \rho$) \textit{only} for the significant candidates in the \texttt{events} slot. This reduces computational complexity from $O(p^2)$ to $O(N_{significant})$. Applies the Multi-Evidence Decision Tree to label events as ``Switch'' or ``Decoupling''\tref{393}.
+    \item[\texttt{validateGLMM(object)}] Runs the hierarchical validation module on significant candidates.
+\end{description}
+
+\section{Phase 4: Network Reconstruction \& Differential Topology}
+
+To translate statistical events into biological mechanisms, we implement a dedicated module for \textbf{Differential Topology Inference}\tref{395}.
+
+\subsection{Regime Definition (Temporal Slicing)}
+For gene pairs identified as a \textbf{Stoichiometric Switch} (Type 1), we utilize the estimated Tipping Point $\hat{\tau}$ and Sharpness $\hat{\epsilon}$ to rigorously partition the trajectory. We explicitly exclude the ``Boundary Layer'' (the transition region) to prevent transition-state noise from contaminating static estimates\tref{397}.
+
+\begin{lstlisting}[language=R]
+# R Logic: Define Stable Regimes
+get_regimes <- function(pseudotime, tau, epsilon) {
+    boundary_width <- 2 * epsilon
+    idx_pre  <- which(pseudotime < (tau - boundary_width))  # Stable State A
+    idx_post <- which(pseudotime > (tau + boundary_width))  # Stable State B
+    return(list(pre = idx_pre, post = idx_post))
+}
+\end{lstlisting}
+
+\subsection{Differential Topology ($\Delta \mathbf{P}$)}
+We compute the static proportionality matrix $\mathbf{P}$ (Rho) separately for the Pre- and Post-transition cell subsets. We define the \textbf{Rewiring Matrix}\tref{400}:
+$$ \mathbf{\Delta P} = \mathbf{P}_{\text{post}} - \mathbf{P}_{\text{pre}} $$
+
+\begin{itemize}
+    \item \textbf{Decoupling ($\Delta P_{ij} \ll 0$):} The regulatory constraint is relaxed. The gene pair moves from a coupled state to an independent state.
+    \item \textbf{Coupling ($\Delta P_{ij} \gg 0$):} A new regulatory constraint is established. The gene pair locks into a fixed stoichiometric ratio.
+\end{itemize}
+
+\subsection{Haywire Hub Analysis}
+We identify driver regulators by calculating the \textbf{Differential Degree Centrality} ($\Delta k$) for each gene. A high $\Delta k$ indicates a gene that has simultaneously rewired its relationship with many targets---a signature of a master regulator or a ``Haywire Hub''\tref{32}.
+$$ \Delta k_i = \sum_{j \neq i} |\Delta P_{ij}| $$
+
+\noindent\textbf{Downstream Integration:} The package exports the list of top $\Delta k$ genes to facilitate motif enrichment analysis (e.g., via \texttt{RCisTarget}), linking the detected stoichiometric switch to specific Transcription Factors (e.g., \textit{MYC}, \textit{TP53})\tref{405}.
+
+\section{Phase 5: Hierarchical Validation Module}
+
+To support clinical experimental designs, DyProp includes a confirmatory GLMM module utilizing \texttt{glmmTMB}. This framework is chosen over standard \texttt{lme4} to leverage the Student's t-distribution for outlier robustness and to explicitly model heteroscedasticity in pseudotime\tref{406, 407}.
+
+\begin{itemize}
+    \item \textbf{Objective:} To separate biological trajectory dynamics from random batch/patient effects while controlling for heavy-tailed residual noise\tref{408}.
+    \item \textbf{Input:} The subset of significant gene pairs identified in Phase 2.
+    \item \textbf{Model:} Robust Generalized Linear Mixed Model\tref{410}.
+    $$ y_{ijk} \sim \mathcal{T}(\mu_{ijk}, \sigma_{ij}, \nu) $$
+    $$ \mu_{ijk} = \beta_0 + f(\text{Pseudotime}_{ij}) + \text{Condition}_k + (1 | \text{Patient}_k) $$
+    $$ \log(\sigma_{ij}) = \gamma_0 + \gamma_1 \text{Pseudotime}_{ij} \quad \text{(Dispersion Model)} $$
+\end{itemize}
+
+\end{document}
