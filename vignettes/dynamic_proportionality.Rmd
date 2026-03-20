@@ -1,0 +1,152 @@
+---
+title: "Introduction to Dynamic Proportionality Analysis"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to Dynamic Proportionality Analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE,
+    comment = "#>"
+)
+```
+
+## Introduction
+
+DyProp (Dynamic Proportionality) is a statistical engine designed to identify mechanisms of network rewiring in longitudinal genomic data (scRNA-seq, scDNA-seq, Multi-omics). It integrates **Compositional Data Analysis (CoDa)** with **Singular Perturbation Theory** to detect stoichiometric switches and network decoupling.
+
+This vignette demonstrates the core workflow using a synthetic dataset.
+
+## Setup
+
+```{r setup}
+library(dyprop)
+library(glmmTMB) # For validation
+```
+
+## 1. Simulate Data
+
+We generate a synthetic scRNA-seq count matrix with 100 cells and 20 genes along a pseudotime trajectory [0, 1].
+We implant a **stoichiometric switch** between `Gene1` and `Gene2` at pseudotime $\tau = 0.5$.
+
+```{r sim_data}
+set.seed(42)
+n_cells <- 100
+n_genes <- 20
+pseudotime <- sort(runif(n_cells, 0, 1))
+
+# Initialize counts
+counts <- matrix(rnbinom(n_cells * n_genes, mu = 10, size = 1), nrow = n_cells, ncol = n_genes)
+colnames(counts) <- paste0("Gene", 1:n_genes)
+
+# Implant Switch: Gene1 and Gene2 are proportional before t=0.5, then decoupled
+tau <- 0.5
+idx_pre <- which(pseudotime < tau)
+idx_post <- which(pseudotime >= tau)
+
+# Pre: High Correlation
+counts[idx_pre, 1] <- rnbinom(length(idx_pre), mu = 50, size = 10)
+counts[idx_pre, 2] <- counts[idx_pre, 1] + rnbinom(length(idx_pre), mu = 5, size = 10) # Correlated
+
+# Post: Decoupled
+counts[idx_post, 1] <- rnbinom(length(idx_post), mu = 50, size = 10)
+counts[idx_post, 2] <- rnbinom(length(idx_post), mu = 10, size = 10) # Independent noise
+```
+
+## 2. Pre-processing
+
+We use `prepareComposition` to perform:
+1. **kNN Pooling** (correct technical dropouts, using GLM-PCA if available).
+2. **Imputation** (handle biological zeros).
+3. **CLR Transformation** (Center Log-Ratio).
+
+```{r preprocess}
+# Create dyprop object
+# Input: Raw counts and pseudotime
+dobj <- prepareComposition(counts, pseudotime, k = 5)
+
+print(dobj)
+```
+
+## 3. Scan Dynamics
+
+We run `scanDynamics` to identify candidate transition events. This uses a high-performance C++ engine to perform vectorized template matching (Sigmoid/Double-Sigmoid) against the log-ratio trajectories of all gene pairs.
+
+```{r scan}
+# Scan for candidates
+# (Returns all pairs sorted by score; filtering happens downstream or manually)
+dobj <- scanDynamics(dobj)
+
+# Check detected events (Top 6)
+head(dobj@events)
+```
+
+### 3.5 FDR Estimation (New)
+
+We estimate the statistical significance of these events using an empirical Null Model (permuting pseudotime).
+
+```{r fdr}
+# Estimate FDR (using small permutations for vignette speed)
+dobj <- estimateFDR(dobj, n_permutations = 1000)
+
+# Filter for significant events (FDR < 0.1)
+sig_events <- dobj@events[dobj@events$FDR < 0.1, ]
+print(paste("Significant Events:", nrow(sig_events)))
+```
+
+## 4. Classify Events
+
+The scanner identifies *potential* events. We now classify them into **Stoichiometric Switches** (Type 1) or **Network Decoupling** (Type 2) using mechanistic metrics:
+*   $\Phi$ (Dynamic Instability)
+*   $\rho$ (Dynamic Coupling)
+
+```{r classify}
+dobj <- classifyEvents(dobj)
+
+# View classifications
+table(dobj@events$Event_Class)
+```
+
+## 5. Network Reconstruction
+
+For confirmed transition events, we analyze the topological rewiring.
+
+### Differential Proportionality
+We calculate the change in the proportionality matrix $\Delta \mathbf{P}$.
+
+```{r network}
+# Analyze the primary switch pair (Gene1 vs Gene2)
+# Ideally found in dobj@events, but for demo we pick explicity if not found (due to random noise)
+if (nrow(dobj@events) > 0) {
+    geneA <- dobj@events$GeneA[1]
+    geneB <- dobj@events$GeneB[1]
+    tau_est <- dobj@events$Tau[1]
+    eps_est <- dobj@events$Epsilon[1]
+
+    rewiring <- calcRewiring(dobj, geneA, geneB, tau = tau_est, epsilon = eps_est)
+
+    # Check Delta P for the partner
+    # Index of partner in the vector
+    idx_B_cols <- which(colnames(dobj@logratio) == geneB)
+    print(paste("Delta P (Gene A vs B):", rewiring$Delta_P[idx_B_cols]))
+}
+```
+
+## 6. Validation (GLMM)
+
+Finally, we validate significant events using a Generalized Linear Mixed Model (GLMM) to distinguish biological signals from random effects (if patient metadata were available).
+
+```{r validate}
+# In this synthetic example, we don't have patient metadata, so it uses a simple LM fallback.
+dobj <- validateGLMM(dobj)
+
+# Inspect model fits
+if (length(dobj@glmm_fits) > 0) {
+    # Fits are stored as a list
+    # names(dobj@glmm_fits)
+    # print(dobj@glmm_fits[[1]])
+}
+```

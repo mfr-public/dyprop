@@ -1,0 +1,41 @@
+Package: dyprop
+Type: Package
+Title: Dynamic Proportionality Analysis
+Version: 0.1.0
+Authors@R: c(
+    person("DyProp", "Team", email = "dev@dyprop.org", role = c("aut", "cre"))
+  )
+Description: A high-performance statistical engine to identify the mechanism of 
+    network rewiring in longitudinal genomic data (scRNA-seq, scDNA-seq, Multi-omics).
+    Integrates Compositional Data Analysis (CoDa) with Singular Perturbation Theory 
+    to detect stoichiometric switches and network decoupling.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Biarch: true
+Imports: 
+    methods,
+    stats,
+    Rcpp (>= 1.0.0),
+    propr,
+    glmmTMB
+LinkingTo: 
+    Rcpp,
+    RcppArmadillo
+RoxygenNote: 7.3.2
+Suggests: 
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    glmpca,
+    FNN
+VignetteBuilder: knitr
+Collate: 
+    'AllClasses.R'
+    'RcppExports.R'
+    'classify_events.R'
+    'engine_fdr.R'
+    'engine_scan.R'
+    'network_analysis.R'
+    'utils_transform.R'
+    'validate_model.R'

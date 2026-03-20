@@ -1,0 +1,193 @@
+\documentclass[11pt, a4paper]{article}
+
+% --- PREAMBLE ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{listings} % For code blocks
+\usepackage{color}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{amsmath} % Added for math
+\usepackage{amssymb} % Added for math
+
+% Geometry
+\geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm}
+
+% Code styling
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\lstset{frame=tb,
+  language=R,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=3
+}
+
+% Title
+\title{\textbf{Technical Specification: Algorithmic Implementation and Software Architecture of DyProp}}
+\author{DyProp Development Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+The \texttt{dyprop} package is an R/Bioconductor extension of the \texttt{propr} ecosystem. It implements the mathematical framework of Dynamic Proportionality using a high-performance C++ backend for vectorized template matching and an R frontend for S4 class management, event classification, and hierarchical validation.
+
+\section{Data Transformation Pipeline}
+
+\subsection{Zero Handling Protocol}
+To enable log-ratio analysis on sparse genomic data without masking biological signals (e.g., gene silencing), we implement a rigorous two-step imputation strategy.
+
+\begin{enumerate}
+    \item \textbf{Step A: Technical Correction (kNN Smoothing)}
+    \begin{itemize}
+        \item \textbf{Objective:} To correct technical dropouts (sporadic zeros) based on manifold proximity.
+        \item \textbf{Implementation:} We apply k-Nearest Neighbor (kNN) pooling ($k=5$) in PCA space.
+        \item \textbf{Logic:} If a zero is sporadic (neighbors have counts), it is smoothed. If a zero is consistent (neighbors are also zero), it is preserved as a Biological Zero.
+    \end{itemize}
+    
+    \item \textbf{Step B: Biological Imputation (Bayesian)}
+    \begin{itemize}
+        \item \textbf{Objective:} To allow log-ratios involving Biological Zeros (e.g., silenced genes) to be computed.
+        \item \textbf{Implementation:} We utilize the \texttt{zCompositions::cmultRepl} function (Count Zero Multiplicative Replacement).
+        \item \textbf{Logic:} Zeros are replaced by a probabilistic estimate $\delta$ derived from the limit of detection, ensuring that an ``On/Off'' switch is detected as a large, quantifiable change in the log-ratio, rather than a missing value.
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Coordinate Projection \& Robustness}
+Following imputation, the data matrix $\mathbf{X}$ is projected into Euclidean space using the Centered Log-Ratio (CLR) transformation. To ensure robustness against outliers (e.g., PCR artifacts) without violating Aitchison geometry, we apply Winsorization at the ratio level.
+
+\begin{lstlisting}
+# R Pseudo-code
+# 1. Full CLR Transform (Preserves Subcompositional Coherence)
+clr_matrix <- propr::propr(imputed_counts)@logratio
+
+# 2. Robust Ratio Calculation (e.g., Gene A vs Gene B)
+ratio_vector <- clr_matrix[, A] - clr_matrix[, B]
+clean_vector <- winsorize(ratio_vector, probs = c(0.01, 0.99))
+\end{lstlisting}
+
+\section{Algorithmic Engine: The Vectorized Scanner}
+
+\subsection{Phase 1: Just-In-Time Dictionary Generation}
+To bypass slow iterative regression (\texttt{nls}), we pre-compute a dictionary of archetypal Boundary Functions. Upon initialization, the C++ backend generates a template matrix $\mathcal{M}$ ($K_{archetypes} \times T$) dynamically to match the user's pseudotime resolution. The grid resolution is strictly coupled to the detection limit via the Nyquist criterion ($\Delta\tau \le \epsilon_{min}$).
+
+\subsection{Phase 2: Vectorized Template Matching (C++)}
+We perform a global search for topological tipping points using dense linear algebra.
+
+\begin{itemize}
+    \item \textbf{Input:} Ratio Matrix $\mathbf{Y}$ ($n \times p$), Template Matrix $\mathcal{M}$.
+    \item \textbf{Operation:} We compute the convolution via matrix multiplication using \texttt{RcppArmadillo}.
+\end{itemize}
+
+\begin{lstlisting}[language=C++]
+// src/dyprop.cpp (Snippet)
+arma::mat scan_templates(arma::mat Y, arma::mat M) {
+    // Y: [Pairs x Time], M: [Archetypes x Time]
+    // Result: [Pairs x Archetypes] correlation matrix
+    arma::mat scores = Y * M.t(); 
+    return scores;
+}
+\end{lstlisting}
+
+\subsection{Phase 3: Quadratic Interpolation}
+To recover continuous parameter estimates from the discrete grid, we apply Parabolic Interpolation.
+\begin{itemize}
+    \item \textbf{Logic:} Given the best matching template index $i$, we fit a local parabola to scores $(R_{i-1}, R_i, R_{i+1})$.
+    \item \textbf{Output:} The vertex of the parabola yields the precise continuous Tipping Point $\hat{\tau}$ and Sharpness $\hat{\epsilon}$.
+\end{itemize}
+
+\section{Software Architecture}
+
+\subsection{Class Structure}
+We define the \texttt{dyprop} S4 class to manage the complex outputs of dynamic analysis.
+
+\begin{lstlisting}
+setClass("dyprop",
+    contains = "propr",       # Inherits basic CoDa slots from parent package
+    slots = c(
+        pseudotime = "numeric", # The ordered coordinate
+        design = "matrix",      # Covariates matrix 
+        
+        # The "Movie" Data (3D Arrays)
+        Phi_Array = "array",    # Dynamic Instability
+        Rho_Array = "array",    # Dynamic Coupling
+        
+        # The "Catalog"
+        events = "data.frame",  # Columns: GeneA, GeneB, Event_Class, Tau, Epsilon, FDR
+        
+        # Downstream & Validation
+        networks = "list",      # Pre/Post adjacency matrices
+        glmm_fits = "list",     # Storage for Phase 5 GLMM objects
+        dictionary_meta = "list"
+    )
+)
+\end{lstlisting}
+
+\subsection{Core Methods}
+\begin{description}
+    \item[\texttt{prepareComposition(counts)}] Wrapper for the kNN + Imputation workflow. Returns clean CLR matrix.
+    \item[\texttt{scanDynamics(object)}] Calls the C++ backend. Populates \texttt{Phi\_Array}, \texttt{Rho\_Array}, and performs the Template Match.
+    \item[\texttt{classifyEvents(object)}] Applies the Multi-Evidence Decision Tree to label events as ``Switch'' or ``Decoupling''.
+    \item[\texttt{validateGLMM(object)}] Runs the hierarchical validation module on significant candidates.
+\end{description}
+
+\section{Phase 4: Network Reconstruction \& Differential Topology}
+
+To translate statistical events into biological mechanisms, we implement a dedicated module for \textbf{Differential Topology Inference}.
+
+\subsection{Regime Definition (Temporal Slicing)}
+For gene pairs identified as a \textbf{Stoichiometric Switch} (Type 1), we utilize the estimated Tipping Point $\hat{\tau}$ and Sharpness $\hat{\epsilon}$ to partition the trajectory. We explicitly exclude the ``Boundary Layer'' to prevent transition-state noise from contaminating static estimates.
+
+\begin{lstlisting}[language=R]
+# R Logic: Define Stable Regimes
+get_regimes <- function(pseudotime, tau, epsilon) {
+    boundary_width <- 2 * epsilon
+    idx_pre  <- which(pseudotime < (tau - boundary_width))  # Stable State A
+    idx_post <- which(pseudotime > (tau + boundary_width))  # Stable State B
+    return(list(pre = idx_pre, post = idx_post))
+}
+\end{lstlisting}
+
+\subsection{Differential Topology ($\Delta \mathbf{P}$)}
+We compute the static proportionality matrix $\mathbf{P}$ (Rho) separately for the Pre- and Post-transition cell subsets. We define the \textbf{Rewiring Matrix}:
+$$ \mathbf{\Delta P} = \mathbf{P}_{\text{post}} - \mathbf{P}_{\text{pre}} $$
+
+\begin{itemize}
+    \item \textbf{Decoupling ($\Delta P_{ij} \ll 0$):} The regulatory constraint is relaxed.
+    \item \textbf{Coupling ($\Delta P_{ij} \gg 0$):} A new regulatory constraint is established.
+\end{itemize}
+
+\subsection{Haywire Hub Analysis}
+We identify driver regulators by calculating the \textbf{Differential Degree Centrality} ($\Delta k$) for each gene. A high $\Delta k$ indicates a gene that has simultaneously rewired its relationship with many targets---a signature of a master regulator or a ``Haywire Hub''.
+$$ \Delta k_i = \sum_{j \neq i} |\Delta P_{ij}| $$
+
+\section{Phase 5: Hierarchical Validation Module}
+
+To support clinical experimental designs, DyProp includes a confirmatory GLMM module utilizing \texttt{glmmTMB}. This framework is chosen over standard \texttt{lme4} to leverage the Student's t-distribution for outlier robustness and to explicitly model heteroscedasticity in pseudotime.
+
+\begin{itemize}
+    \item \textbf{Objective:} To separate biological trajectory dynamics from random batch/patient effects while controlling for heavy-tailed residual noise.
+    \item \textbf{Input:} The subset of significant gene pairs identified in Phase 2.
+    \item \textbf{Model:} Robust Generalized Linear Mixed Model.
+    $$ y_{ijk} \sim \mathcal{T}(\mu_{ijk}, \sigma_{ij}, \nu) $$
+    $$ \mu_{ijk} = \beta_0 + f(\text{Pseudotime}_{ij}) + \text{Condition}_k + (1 | \text{Patient}_k) $$
+    $$ \log(\sigma_{ij}) = \gamma_0 + \gamma_1 \text{Pseudotime}_{ij} \quad \text{(Dispersion Model)} $$
+\end{itemize}
+
+\end{document}
