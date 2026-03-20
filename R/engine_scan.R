@@ -56,6 +56,9 @@ scanDynamics <- function(object,
   X_clr <- object@logratio
   n_genes <- ncol(X_clr)
   gene_names <- colnames(X_clr)
+  if (is.null(gene_names) || length(gene_names) == 0) {
+    gene_names <- paste0("Gene_", seq_len(n_genes))
+  }
 
   n_pairs <- as.numeric(n_genes) * (n_genes - 1) / 2
 
@@ -96,6 +99,13 @@ scanDynamics <- function(object,
     )
     return(object)
   }
+
+  cat("DEBUG C++ RETURN LENGTHS:\n")
+  cat("GeneA_Idx:", length(results_list$GeneA_Idx), "\n")
+  cat("Score:", length(results_list$Score), "\n")
+  cat("Model_Type:", length(results_list$Model_Type), "\n")
+  cat("gene_names applied:", length(gene_names[results_list$GeneA_Idx]), "\n")
+  cat("head(GeneA_Idx):", head(results_list$GeneA_Idx), "\n")
 
   events_df <- data.frame(
     GeneA = gene_names[results_list$GeneA_Idx],

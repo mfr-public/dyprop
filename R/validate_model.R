@@ -40,8 +40,8 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL) {
 
     # Check metadata
     if (is.null(meta) || nrow(meta) == 0) {
-        warning("@design slot is empty. Cannot fit mixed models without patient metadata.")
-        return(object)
+        warning("@design slot is empty. Will fit generalized linear models without mixed/patient effects.")
+        meta <- data.frame(dummy = rep(1, nrow(X_clr))) # Dummy structural metadata
     }
 
     pseudotime <- object@pseudotime
@@ -105,7 +105,32 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL) {
 
     # Pre-clean NULL errors
     fits_list <- fits_list[!vapply(fits_list, is.null, logical(1))]
-
     object@glmm_fits <- fits_list
+
+    # Extract Spline p-values back to the event master list
+    p_vals <- rep(NA_real_, nrow(object@events))
+
+    for (i in seq_len(nrow(candidates))) {
+        geneA <- candidates$GeneA[i]
+        geneB <- candidates$GeneB[i]
+        pair_key <- paste(geneA, geneB, sep = "_")
+
+        fit_summary <- fits_list[[pair_key]]
+        if (!is.null(fit_summary)) {
+            cond_table <- fit_summary$coefficients$cond
+            spline_rows <- grep("ns\\(pseudotime", rownames(cond_table))
+            if (length(spline_rows) > 0) {
+                # Min P-value among spline degrees of freedom
+                p_val <- min(cond_table[spline_rows, 4])
+
+                # Assign to original object row
+                idx <- which(object@events$GeneA == geneA & object@events$GeneB == geneB)
+                if (length(idx) > 0) p_vals[idx[1]] <- p_val
+            }
+        }
+    }
+
+    object@events$P_Value <- p_vals
+
     return(object)
 })
