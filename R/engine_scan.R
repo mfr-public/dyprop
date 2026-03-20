@@ -26,7 +26,7 @@ scanDynamics <- function(object,
                          tau_grid = seq(0.1, 0.9, length.out = 20),
                          epsilon_grid = c(0.05, 0.1, 0.15, 0.2),
                          cores = 1L,
-                         pairs = NULL) {
+                         min_score = 0.5) {
   # 1. Input Validation
   if (!inherits(object, "dyprop")) stop("Input must be a 'dyprop' object.")
   if (length(object@pseudotime) == 0) stop("Pseudotime slot is empty.")
@@ -57,47 +57,56 @@ scanDynamics <- function(object,
   n_genes <- ncol(X_clr)
   gene_names <- colnames(X_clr)
 
-  # Generate All Unique Pairs (Combinatorics)
-  # WARNING: For 10,000 genes, this is 50 million pairs.
-  # We strongly recommend the user pre-filters the object using propr::subset
-  idx <- combn(n_genes, 2)
-  n_pairs <- ncol(idx)
+  n_pairs <- as.numeric(n_genes) * (n_genes - 1) / 2
 
-  message(">>> Scanning ", n_pairs, " gene pairs across ", length(tau_grid) * length(epsilon_grid), " archetypes...")
+  # Nyquist safety check
+  min_eps <- min(epsilon_grid)
+  step_tau <- if (length(tau_grid) > 1) tau_grid[2] - tau_grid[1] else 0
+  if (step_tau > min_eps) {
+    stop(sprintf("Nyquist Theorem violated: Grid step size tau (%f) must be <= minimum epsilon (%f).", step_tau, min_eps))
+  }
 
-  # Construct Y (Pairs x Time) - efficiently
-  # We transpose X_clr to (Genes x Samples) for faster column access
-  X_t <- t(X_clr)
+  message(">>> Memory-Safe Scanning ", n_pairs, " gene pairs across ", length(tau_grid) * length(epsilon_grid) * 2, " topological archetypes...")
 
-  # 3. RUN C++ SCAN
-  # We'll need to update the C++ signature to accept X_t (Genes x Time) and the index pairs
-  # to avoid allocating the massive Y matrix in R RAM.
-  # But given our current C++ 'scan_kernels.cpp' accepts Y, let's construct it.
-  # Ideally, for huge data, we would push the "Pair Construction" to C++.
-
-  # For now (v0.1), let's construct Y in chunks or assume the user has subsetted.
-  Y <- X_clr[, idx[1, ]] - X_clr[, idx[2, ]] # (Samples x Pairs)
-  Y <- t(Y) # (Pairs x Samples) - matches C++ expectation
+  # Construct X_t (Genes x Time) for C++
+  X_t <- as.matrix(t(X_clr))
 
   # 4. Call Engine
-  # Ensure OpenMP uses the requested cores
   Sys.setenv("OMP_NUM_THREADS" = as.character(cores))
 
-  results_list <- scan_sequences(Y,
+  results_list <- scan_sequences(X_t,
     time_vec = object@pseudotime,
     tau_grid = tau_grid,
-    epsilon_grid = epsilon_grid
+    epsilon_grid = epsilon_grid,
+    min_score = min_score
   )
 
   # 5. Format Results
+  if (length(results_list$GeneA_Idx) == 0) {
+    object@events <- data.frame(
+      GeneA = character(0),
+      GeneB = character(0),
+      Tau_Grid = numeric(0),
+      Epsilon_Grid = numeric(0),
+      Score = numeric(0),
+      Model_Type = character(0),
+      Event_Class = character(0),
+      FDR = numeric(0),
+      stringsAsFactors = FALSE
+    )
+    return(object)
+  }
+
   events_df <- data.frame(
-    GeneA = gene_names[idx[1, ]],
-    GeneB = gene_names[idx[2, ]],
-    Tau_Grid = results_list$tau,
-    Epsilon_Grid = results_list$epsilon,
-    Score = results_list$score,
-    Event_Class = NA, # To be filled by classifyEvents
-    FDR = NA
+    GeneA = gene_names[results_list$GeneA_Idx],
+    GeneB = gene_names[results_list$GeneB_Idx],
+    Tau_Grid = results_list$Tau,
+    Epsilon_Grid = results_list$Epsilon,
+    Score = results_list$Score,
+    Model_Type = ifelse(results_list$Model_Type == 1, "Logistic", "Gaussian"),
+    Event_Class = NA,
+    FDR = NA,
+    stringsAsFactors = FALSE
   )
 
   # Sort by Score (Best matches first)

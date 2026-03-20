@@ -34,8 +34,6 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL) {
         return(object)
     }
 
-    message(">>> Validating ", nrow(candidates), " candidates with GLMM...")
-
     # Data setup
     X_clr <- object@logratio
     meta <- object@design # Assuming this contains patient_id, condition, etc.
@@ -61,41 +59,53 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL) {
         }
     }
 
-    fits <- list()
+    cores <- getOption("mc.cores", parallel::detectCores() - 1L)
+    if (cores < 1) cores <- 1L
+    message(sprintf(">>> Validating %d candidates with GLMM on %d cores...", nrow(candidates), cores))
 
-    for (i in seq_len(nrow(candidates))) {
-        geneA <- candidates$GeneA[i]
-        geneB <- candidates$GeneB[i]
+    # Identify pairs
+    pairs_list <- lapply(seq_len(nrow(candidates)), function(i) {
+        list(geneA = candidates$GeneA[i], geneB = candidates$GeneB[i])
+    })
 
-        # Calc Ratio Y
+    fit_worker <- function(pair) {
+        geneA <- pair$geneA
+        geneB <- pair$geneB
+
         y_vec <- X_clr[, geneA] - X_clr[, geneB]
 
-        # Build DF
         df_fit <- data.frame(
             y = y_vec,
             pseudotime = pseudotime
         )
-        df_fit <- cbind(df_fit, meta) # Add metadata columns
+        df_fit <- cbind(df_fit, meta)
 
-        # Fit Model
-        tryCatch(
+        res <- tryCatch(
             {
                 fit <- glmmTMB::glmmTMB(as.formula(formula_str),
                     data = df_fit,
                     family = glmmTMB::t_family(),
                     dispformula = ~pseudotime
                 )
-
-                # Store result (maybe just summary or p-values to save space)
-                # For now, store summary
-                fits[[paste(geneA, geneB, sep = "_")]] <- summary(fit)
+                summary(fit)
             },
             error = function(e) {
                 warning(paste("GLMM fit failed for", geneA, geneB, ":", e$message))
+                NULL
             }
         )
+        return(res)
     }
 
-    object@glmm_fits <- fits
+    # Parallel map
+    fits_list <- parallel::mclapply(pairs_list, fit_worker, mc.cores = cores)
+
+    # Associate names
+    names(fits_list) <- sapply(pairs_list, function(p) paste(p$geneA, p$geneB, sep = "_"))
+
+    # Pre-clean NULL errors
+    fits_list <- fits_list[!vapply(fits_list, is.null, logical(1))]
+
+    object@glmm_fits <- fits_list
     return(object)
 })

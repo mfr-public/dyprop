@@ -44,17 +44,32 @@ prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, nco
                 knn_res <- FNN::get.knn(X_latent, k = k)
                 knn_idx <- knn_res$nn.index
 
-                # C. Pool Counts (Raw Averaging)
-                counts_mat <- as.matrix(counts)
-                cp_temp <- matrix(0, nrow = nrow(counts), ncol = ncol(counts))
-                rownames(cp_temp) <- rownames(counts)
-                colnames(cp_temp) <- colnames(counts)
+                # C. Pool Counts (Sparse Matrix Multiplication)
+                if (requireNamespace("Matrix", quietly = TRUE)) {
+                    n_samples <- nrow(counts)
+                    i_idx <- rep(seq_len(n_samples), times = k + 1)
+                    j_idx <- c(seq_len(n_samples), as.vector(knn_idx))
 
-                for (i in seq_len(nrow(counts))) {
-                    # Neighbors + Self
-                    idx <- c(i, knn_idx[i, ])
-                    # Average raw counts to preserve scale
-                    cp_temp[i, ] <- colMeans(counts_mat[idx, , drop = FALSE])
+                    W <- Matrix::sparseMatrix(
+                        i = i_idx,
+                        j = j_idx,
+                        x = 1 / (k + 1),
+                        dims = c(n_samples, n_samples)
+                    )
+                    counts_mat <- as.matrix(counts)
+                    cp_temp <- as.matrix(W %*% counts_mat)
+                    rownames(cp_temp) <- rownames(counts)
+                    colnames(cp_temp) <- colnames(counts)
+                } else {
+                    # Fallback
+                    counts_mat <- as.matrix(counts)
+                    cp_temp <- matrix(0, nrow = nrow(counts), ncol = ncol(counts))
+                    rownames(cp_temp) <- rownames(counts)
+                    colnames(cp_temp) <- colnames(counts)
+                    for (i in seq_len(nrow(counts))) {
+                        idx <- c(i, knn_idx[i, ])
+                        cp_temp[i, ] <- colMeans(counts_mat[idx, , drop = FALSE])
+                    }
                 }
                 message(sprintf("... pooled %d neighbors.", k))
                 cp_temp
@@ -102,36 +117,28 @@ prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, nco
         counts_imp <- counts_pooled + 1
     }
 
-    # 3. CLR Transform (Manual Implementation)
-    message("... Calculating CLR transform")
-    message("DEBUG: counts_imp[1:5,1:5]:")
-    print(counts_imp[1:5, 1:5])
-    message("DEBUG: row sums: ", paste(head(rowSums(counts_imp)), collapse = " "))
+    # 3. CLR Transform (Ecosystem Implementation)
+    message("... Calculating CLR transform via propr::propr")
 
-
-    # helper for CLR
-    clr_fun <- function(x) {
-        log_x <- log(x)
-        return(log_x - mean(log_x))
-    }
-
-    # Apply CLR row-wise (Samples)
-    # counts_imp is Samples x Genes
     if (any(counts_imp <= 0)) {
-        warning("Zeros/Negatives found in CLR input. Adding small constant.")
+        warning("Zeros/Negatives found in CLR input. Adding small constant 1e-6.")
         counts_imp[counts_imp <= 0] <- 1e-6
     }
-    X_clr <- t(apply(counts_imp, 1, clr_fun))
+
+    # Use propr framework to handle CoDa structure securely
+    # Note: winsorization of the difference trajectories happens natively in C++ layer
+    pr <- propr::propr(counts_imp, metric = "rho", p = 0)
+    X_clr <- pr@logratio
 
     # 4. Create dyprop object
     new("dyprop",
-        counts = as.data.frame(counts),
+        counts = as.data.frame(counts_imp),
         logratio = as.data.frame(X_clr),
-        matrix = t(X_clr), # Store CLR (Genes x Samples) for scanning
-        pairs = numeric(), # Empty pairs vector (numeric)
+        matrix = pr@matrix,
+        pairs = pr@pairs,
         pseudotime = as.numeric(pseudotime),
         design = as.data.frame(design),
-        Phi_Array = array(0, dim = c(0, 0, 0)),
-        Rho_Array = array(0, dim = c(0, 0, 0))
+        metric_cache = new.env(parent = emptyenv()),
+        events = data.frame()
     )
 }

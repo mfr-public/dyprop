@@ -82,72 +82,36 @@ estimateFDR <- function(object, n_permutations = 10000, cores = 1L) {
     null_scores <- null_object@events$Score
     message("... Generated ", length(null_scores), " null scores.")
 
-    # 3. Calculate FDR
+    # 3. Calculate FDR correctly over full theoretical pair spaces
+    n_real_pairs <- ncol(object@logratio) * (ncol(object@logratio) - 1) / 2
+    n_null_pairs <- ncol(null_object@logratio) * (ncol(null_object@logratio) - 1) / 2
+
     real_scores <- object@events$Score
     n_real <- length(real_scores)
-    n_null <- length(null_scores)
 
     fdrs <- numeric(n_real)
 
-    # For each real score, how many nulls are greater?
-    # Optimization: Sort both and loop? Or just simple empirical calc.
-    # FDR(s) = (N_null_ge / N_null) / (N_real_ge / N_real)
-
-    # Since real_scores are already sorted descending in scanDynamics:
-    # rank i implies i scores are >= real_scores[i]
-
-    # Sort nulls descending
     null_scores <- sort(null_scores, decreasing = TRUE)
 
     for (i in seq_len(n_real)) {
         s <- real_scores[i]
 
-        # Count nulls >= s
-        # Since nulls sorted desc, find first index where null < s
-        # Or typical approach: sum(nulls >= s)
         n_null_ge <- sum(null_scores >= s)
 
-        prop_null <- n_null_ge / n_null
-        prop_real <- i / n_real # i is count of real scores >= s (since sorted)
+        prop_null <- n_null_ge / n_null_pairs
+        prop_real <- i / n_real_pairs
 
         fdr <- prop_null / prop_real
         fdrs[i] <- min(fdr, 1.0) # Cap at 1
     }
 
-    # Enforce monotonicity? (Usually q-values are monotonic)
-    # cummin? No, usually we do cummax from bottom up or similar.
-    # Standard BH: sort p-values. Here we have scores.
-    # Higher score -> Lower FDR.
-    # So if you have a high score with high FDR, but a lower score has lower FDR, that's weird.
-    # Usually we enforce that higher scores have lower (or equal) FDR.
-    # We can use cummin() on the FDRs if we traverse from top score to bottom score? NO.
-    # If score A > score B, FDR(A) should be <= FDR(B).
-    # So as we go down the list (scores decrease), FDR should increase.
-    # So we take cummax() ? No.
-    # We want to ensure: FDR is increasing function of rank.
-    # We can take cummax() of FDRs as we go down the list?
-    # Yes: If a better score had worse FDR, we'd be confused.
-    # Actually, standard approach (Storey) produces q-values which are monotonic.
-    # Let's apply cummax to ensure monotonicity.
-
-    # fdrs <- cummax(fdrs) # Wait, if top hit has FDR 0.05, next hit has FDR 0.01, that's impossible mathematically if prop_real increases faster.
-    # But due to noise it might happen.
-    # Let's leave raw empirical FDR for now, or just cummax?
-    # q-value = min(FDR(t)) for all t <= s.
-    # So for a given score s, the q-value is the minimum FDR found for any score <= s? No.
-    # q-value is min FDR for any threshold t <= s (more stringent).
-    # Here more stringent means HIGHER score.
-    # So q[i] = min(FDR[1:i]).
-    # Yes, valid FDR is monotonic.
-    # Since we are iterating from Highest Score (Stringent) to Lowest,
-    # The FDR usually rises.
-    # If we find a lower FDR later, it effectively improves the previous ones? No.
-    # The q-value of a feature is the expected proportion of false positives incurred
-    # when calling that feature significant.
-    # So we should validly use:
-    # object@events$FDR <- cummin(fdrs(reversed)) ... standard q-value logic is tricky.
-    # Let's stick to the raw ratio definition from the paper docs for now:
-    # "Empirical p-values... calculated relative to this null distribution."
+    # Enforce strict monotonicity (q-values representation)
+    # Traverse from worst score to best score to propagate the tightest significance threshold.
+    if (n_real > 1) {
+        for (i in seq(n_real - 1, 1, by = -1)) {
+            fdrs[i] <- min(fdrs[i], fdrs[i + 1])
+        }
+    }
 
     object@events$FDR <- fdrs
 

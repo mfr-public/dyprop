@@ -18,8 +18,8 @@ test_that("estimateFDR works correctly", {
     )
 
     # 2. Run Scan first (needed to populate events)
-    # We expect some random matches
-    obj <- scanDynamics(obj)
+    # We expect some random matches, disable memory threshold
+    obj <- scanDynamics(obj, min_score = 0.0)
     expect_true(nrow(obj@events) > 0)
 
     # 3. Run FDR Estimation

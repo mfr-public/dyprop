@@ -83,8 +83,7 @@ calcRewiring <- function(object, geneA, geneB, tau = NULL, epsilon = NULL) {
     # Implementation: Calculate for the specific gene against ALL others to find hubs.
 
     # Vectorized Rho for specific gene vs ALL
-    calc_rho_vec <- function(target_gene_idx, X) {
-        # n <- nrow(X) # Unused
+    calc_rho_vec <- function(target_gene_idx, X, lambda = 1e-5) {
         tgt <- X[, target_gene_idx]
         var_tgt <- var(tgt)
 
@@ -96,7 +95,7 @@ calcRewiring <- function(object, geneA, geneB, tau = NULL, epsilon = NULL) {
         covs <- cov(X, tgt) # Vector
         vlrs <- vars_all + var_tgt - 2 * covs
 
-        rhos <- 1 - vlrs / (vars_all + var_tgt)
+        rhos <- 1 - vlrs / (vars_all + var_tgt + lambda)
         return(rhos)
     }
 

@@ -26,8 +26,7 @@ setClass(
   slots = c(
     pseudotime = "numeric",
     design = "data.frame",
-    Phi_Array = "array",
-    Rho_Array = "array",
+    metric_cache = "environment",
     events = "data.frame",
     glmm_fits = "list",
     dictionary_meta = "list"
@@ -35,8 +34,6 @@ setClass(
   prototype = list(
     pseudotime = numeric(0),
     design = data.frame(),
-    Phi_Array = array(0, dim = c(0, 0, 0)),
-    Rho_Array = array(0, dim = c(0, 0, 0)),
     events = data.frame(),
     glmm_fits = list(),
     dictionary_meta = list()
@@ -54,19 +51,8 @@ setValidity(
     msg <- NULL
 
     # 1. Inherited Dimension Check
-    # Ensure the new arrays match the dimensions of the parent logratio matrix
     n_features <- ncol(object@logratio)
     n_samples <- nrow(object@logratio)
-
-    # Check Phi_Array Dimensions (Genes x Genes x Time)
-    if (any(dim(object@Phi_Array)[1:2] != n_features) && length(object@Phi_Array) > 0) {
-      msg <- c(msg, "Phi_Array dimensions [1:2] do not match number of features in @logratio.")
-    }
-
-    # Check Rho_Array Dimensions
-    if (any(dim(object@Rho_Array)[1:2] != n_features) && length(object@Rho_Array) > 0) {
-      msg <- c(msg, "Rho_Array dimensions [1:2] do not match number of features in @logratio.")
-    }
 
     # 2. Pseudotime Consistency
     # The length of pseudotime vector must match the number of samples (rows in counts)

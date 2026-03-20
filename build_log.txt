@@ -1,0 +1,16 @@
+* installing to library ‘/Users/mark/Library/R/arm64/4.5/library’
+* installing *source* package ‘dyprop’ ...
+** this is package ‘dyprop’ version ‘0.1.0’
+** using staged installation
+** libs
+using C++ compiler: ‘Apple clang version 17.0.0 (clang-1700.0.13.3)’
+using SDK: ‘’
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG  -I'/Users/mark/Library/R/arm64/4.5/library/Rcpp/include' -I'/Users/mark/Library/R/arm64/4.5/library/RcppArmadillo/include' -I/opt/R/arm64/include    -fPIC  -falign-functions=64 -Wall -g -O2   -c calc_metrics.cpp -o calc_metrics.o
+calc_metrics.cpp:6:10: fatal error: 'omp.h' file not found
+    6 | #include <omp.h>
+      |          ^~~~~~~
+1 error generated.
+make: *** [calc_metrics.o] Error 1
+ERROR: compilation failed for package ‘dyprop’
+* removing ‘/Users/mark/Library/R/arm64/4.5/library/dyprop’
+* restoring previous ‘/Users/mark/Library/R/arm64/4.5/library/dyprop’

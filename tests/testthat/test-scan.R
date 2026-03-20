@@ -24,8 +24,8 @@ test_that("Full dyprop workflow runs on synthetic data", {
     expect_equal(dim(dat@logratio), c(n_samples, n_genes))
 
     # 3. Scan Dynamics
-    # Use small grid for speed
-    dat <- scanDynamics(dat, tau_grid = seq(2, 8, by = 2), epsilon_grid = c(0.5, 1), cores = 1)
+    # Use small grid for speed and enforce Nyquist
+    dat <- scanDynamics(dat, tau_grid = seq(2, 8, by = 0.5), epsilon_grid = c(0.5, 1), cores = 1, min_score = 0.0)
 
     expect_true(nrow(dat@events) > 0)
     expect_true("Score" %in% names(dat@events))

@@ -11,23 +11,41 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// scan_sequences
-List scan_sequences(arma::mat Y_raw, arma::vec time_vec, arma::vec tau_grid, arma::vec epsilon_grid);
-RcppExport SEXP _dyprop_scan_sequences(SEXP Y_rawSEXP, SEXP time_vecSEXP, SEXP tau_gridSEXP, SEXP epsilon_gridSEXP) {
+// calc_metrics
+List calc_metrics(arma::mat X_clr, IntegerVector geneA_idx, IntegerVector geneB_idx, arma::vec pseudotime, double h_opt, double lambda_reg);
+RcppExport SEXP _dyprop_calc_metrics(SEXP X_clrSEXP, SEXP geneA_idxSEXP, SEXP geneB_idxSEXP, SEXP pseudotimeSEXP, SEXP h_optSEXP, SEXP lambda_regSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< arma::mat >::type Y_raw(Y_rawSEXP);
+    Rcpp::traits::input_parameter< arma::mat >::type X_clr(X_clrSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type geneA_idx(geneA_idxSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type geneB_idx(geneB_idxSEXP);
+    Rcpp::traits::input_parameter< arma::vec >::type pseudotime(pseudotimeSEXP);
+    Rcpp::traits::input_parameter< double >::type h_opt(h_optSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_reg(lambda_regSEXP);
+    rcpp_result_gen = Rcpp::wrap(calc_metrics(X_clr, geneA_idx, geneB_idx, pseudotime, h_opt, lambda_reg));
+    return rcpp_result_gen;
+END_RCPP
+}
+// scan_sequences
+List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid, arma::vec epsilon_grid, double min_score);
+RcppExport SEXP _dyprop_scan_sequences(SEXP X_clrSEXP, SEXP time_vecSEXP, SEXP tau_gridSEXP, SEXP epsilon_gridSEXP, SEXP min_scoreSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< arma::mat >::type X_clr(X_clrSEXP);
     Rcpp::traits::input_parameter< arma::vec >::type time_vec(time_vecSEXP);
     Rcpp::traits::input_parameter< arma::vec >::type tau_grid(tau_gridSEXP);
     Rcpp::traits::input_parameter< arma::vec >::type epsilon_grid(epsilon_gridSEXP);
-    rcpp_result_gen = Rcpp::wrap(scan_sequences(Y_raw, time_vec, tau_grid, epsilon_grid));
+    Rcpp::traits::input_parameter< double >::type min_score(min_scoreSEXP);
+    rcpp_result_gen = Rcpp::wrap(scan_sequences(X_clr, time_vec, tau_grid, epsilon_grid, min_score));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_dyprop_scan_sequences", (DL_FUNC) &_dyprop_scan_sequences, 4},
+    {"_dyprop_calc_metrics", (DL_FUNC) &_dyprop_calc_metrics, 6},
+    {"_dyprop_scan_sequences", (DL_FUNC) &_dyprop_scan_sequences, 5},
     {NULL, NULL, 0}
 };
 
