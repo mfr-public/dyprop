@@ -2,6 +2,7 @@
 // [[Rcpp::plugins(openmp)]]
 
 #include <RcppArmadillo.h>
+#include <algorithm>
 #include <cmath>
 #ifdef _OPENMP
 #include <omp.h>
@@ -15,60 +16,96 @@ List calc_metrics(arma::mat X_clr, IntegerVector geneA_idx,
                   IntegerVector geneB_idx, arma::vec pseudotime, double h_opt,
                   double lambda_reg = 1e-5) {
 
-  // X_clr must be strictly Genes x Time
   int n_events = geneA_idx.length();
   int n_time = pseudotime.n_elem;
+  int n_genes = X_clr.n_rows;
 
-  // Output containers (Events x Time)
-  arma::mat Phi_traces(n_events, n_time);
-  arma::mat Rho_traces(n_events, n_time);
+  arma::uvec class_id(n_events);
 
   // Pre-calculate Gaussian Weights Matrix W (Time x Time)
-  // W(i, j) represents the weight of cell j when the kernel is centered at cell
-  // i
   arma::mat W(n_time, n_time);
   for (int i = 0; i < n_time; ++i) {
     double t0 = pseudotime(i);
     arma::rowvec w =
         arma::exp(-arma::pow(pseudotime.t() - t0, 2) / (2.0 * h_opt * h_opt));
-    W.row(i) = w / arma::sum(w); // Ensure weights sum directly to 1
+    W.row(i) = w / arma::sum(w);
   }
 
-// Vectorized computation of variances per event trajectory via OpenMP
+  arma::mat W_t = W.t(); // Transpose once
+
+  // Pre-compute Expected Values (Mu) and Expected Variances (Var) for ALL genes
+  arma::mat Mu_X = X_clr * W_t;
+  arma::mat Mu_X_sq = arma::square(X_clr) * W_t;
+  arma::mat Var_X = Mu_X_sq - arma::square(Mu_X);
+
+  int batch_size = 512;
+  int n_batches = std::ceil((double)n_events / batch_size);
+  int update_interval = std::max(1, n_batches / 40);
+  int progress_counter = 0;
+
+  // Level 3 BLAS matrix batching via OpenMP
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
 #endif
-  for (int e = 0; e < n_events; ++e) {
-    // R indices are 1-based, converting to C++ 0-based indexing
-    int gA = geneA_idx(e) - 1;
-    int gB = geneB_idx(e) - 1;
+  for (int b = 0; b < n_batches; ++b) {
 
-    arma::rowvec valA = X_clr.row(gA);
-    arma::rowvec valB = X_clr.row(gB);
-    arma::rowvec lr = valA - valB;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+    {
+      progress_counter++;
+      if (progress_counter % update_interval == 0) {
+        Rcpp::Rcout << ".";
+      }
+    }
 
-    for (int t_idx = 0; t_idx < n_time; ++t_idx) {
-      arma::rowvec w = W.row(t_idx);
+    int start_e = b * batch_size;
+    int end_e = std::min(n_events, start_e + batch_size);
+    int K = end_e - start_e;
 
-      // Expected Value (Mu)
-      double mu_A = arma::sum(w % valA);
-      double mu_B = arma::sum(w % valB);
-      double mu_lr = arma::sum(w % lr);
+    arma::mat lr_sq_mat(K, n_time);
 
-      // Expected Variance
-      double var_A = arma::sum(w % arma::square(valA - mu_A));
-      double var_B = arma::sum(w % arma::square(valB - mu_B));
-      double var_lr = arma::sum(w % arma::square(lr - mu_lr));
+    for (int k = 0; k < K; ++k) {
+      int e = start_e + k;
+      int gA = geneA_idx(e) - 1;
+      int gB = geneB_idx(e) - 1;
+      lr_sq_mat.row(k) = arma::square(X_clr.row(gA) - X_clr.row(gB));
+    }
 
-      double denom = var_A + var_B + 1e-12; // Safety guard preventing NaN
+    // Level 3 BLAS GEMM (Matrix-Matrix product). Drastically maximizes cache
+    // reuse to skip the memory bandwidth boundary!
+    arma::mat E_lr_sq_mat = lr_sq_mat * W_t;
 
-      // Dynamic Instability
-      Phi_traces(e, t_idx) = var_lr / (denom + lambda_reg);
+    for (int k = 0; k < K; ++k) {
+      int e = start_e + k;
+      int gA = geneA_idx(e) - 1;
+      int gB = geneB_idx(e) - 1;
 
-      // Dynamic Coupling (Proportionality)
-      Rho_traces(e, t_idx) = 1.0 - (var_lr / denom);
+      arma::rowvec E_lr_sq = E_lr_sq_mat.row(k);
+      arma::rowvec mu_lr = Mu_X.row(gA) - Mu_X.row(gB);
+      arma::rowvec var_lr = E_lr_sq - arma::square(mu_lr);
+
+      arma::rowvec denom =
+          Var_X.row(gA) + Var_X.row(gB) + 1e-12; // Safety guard
+      arma::rowvec phi_vec = var_lr / (denom + lambda_reg);
+      arma::rowvec rho_vec = 1.0 - (var_lr / denom);
+
+      double max_phi = phi_vec.max();
+      double min_rho = rho_vec.min();
+
+      if (max_phi < 0.2) {
+        class_id(e) = 0; // Homeostasis
+      } else {
+        if (min_rho < 0.5) {
+          class_id(e) = 2; // Decoupling
+        } else {
+          class_id(e) = 1; // Switch
+        }
+      }
     }
   }
 
-  return List::create(Named("Phi") = Phi_traces, Named("Rho") = Rho_traces);
+  Rcpp::Rcout << "\n";
+
+  return List::create(Named("Class_ID") = class_id);
 }

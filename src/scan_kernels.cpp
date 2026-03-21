@@ -132,6 +132,10 @@ List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid,
   std::vector<std::vector<double>> res_score(n_threads);
   std::vector<std::vector<int>> res_type(n_threads);
 
+  int update_interval =
+      std::max(1, (n_genes - 1) / 40); // 2.5% progression ticks
+  int progress_counter = 0;
+
   // Execute Combinatoric Map-Reduce Pattern
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
@@ -141,6 +145,17 @@ List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid,
 #ifdef _OPENMP
     tid = omp_get_thread_num();
 #endif
+
+    // Track thread-safe progress efficiently on outer loop limits
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+    {
+      progress_counter++;
+      if (progress_counter % update_interval == 0) {
+        Rcpp::Rcout << ".";
+      }
+    }
 
     for (int j = i + 1; j < n_genes; ++j) {
       // Generate exact pairwise difference dynamically

@@ -1,7 +1,7 @@
 Package: dyprop
 Type: Package
 Title: Dynamic Proportionality Analysis
-Version: 0.2.0
+Version: 0.2.3
 Authors@R: c(
     person("DyProp", "Team", email = "dev@dyprop.org", role = c("aut", "cre"))
   )
@@ -28,7 +28,8 @@ Suggests:
     knitr,
     rmarkdown,
     glmpca,
-    FNN
+    FNN,
+    pbmcapply
 VignetteBuilder: knitr
 Collate: 
     'AllClasses.R'

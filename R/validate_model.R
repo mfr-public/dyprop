@@ -97,8 +97,12 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL) {
         return(res)
     }
 
-    # Parallel map
-    fits_list <- parallel::mclapply(pairs_list, fit_worker, mc.cores = cores)
+    # Parallel map with native UX overrides
+    if (requireNamespace("pbmcapply", quietly = TRUE) && .Platform$OS.type != "windows") {
+        fits_list <- pbmcapply::pbmclapply(pairs_list, fit_worker, mc.cores = cores)
+    } else {
+        fits_list <- parallel::mclapply(pairs_list, fit_worker, mc.cores = cores)
+    }
 
     # Associate names
     names(fits_list) <- sapply(pairs_list, function(p) paste(p$geneA, p$geneB, sep = "_"))

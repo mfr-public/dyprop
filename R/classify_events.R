@@ -52,40 +52,11 @@ setMethod("classifyEvents", "dyprop", function(object, lambda = 1e-5) {
 
     results <- calc_metrics(X_t, geneA_idx, geneB_idx, pseudotime, h_opt, lambda)
 
-    Phi_traces <- results$Phi
-    Rho_traces <- results$Rho
-
-    classes <- character(n_events)
-
-    for (i in seq_len(n_events)) {
-        phi_t <- Phi_traces[i, ]
-        rho_t <- Rho_traces[i, ]
-
-        max_phi <- max(phi_t)
-        min_rho <- min(rho_t)
-
-        TH_PHI <- 0.2
-        TH_RHO <- 0.5
-
-        if (max_phi < TH_PHI) {
-            classes[i] <- "Homeostasis"
-        } else {
-            if (min_rho < TH_RHO) {
-                classes[i] <- "Decoupling"
-            } else {
-                classes[i] <- "Switch"
-            }
-        }
-
-        # Lazy Evaluation Storage: Write trace safely to environment cache
-        pair_key <- paste(events$GeneA[i], events$GeneB[i], sep = "_")
-        object@metric_cache[[pair_key]] <- list(Phi = phi_t, Rho = rho_t)
-    }
-
-    object@events$Event_Class <- classes
+    class_map <- c("Homeostasis", "Switch", "Decoupling")
+    object@events$Event_Class <- class_map[results$Class_ID + 1]
 
     message(">>> Classification Complete.")
-    table(classes)
+    print(table(object@events$Event_Class))
 
     return(object)
 })
