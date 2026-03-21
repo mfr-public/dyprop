@@ -103,43 +103,58 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL, max_can
                 spline_rows <- grep("ns\\(pseudotime", rownames(cond_table))
 
                 if (length(spline_rows) > 0) {
-                    min(cond_table[spline_rows, 4])
+                    p_val <- min(cond_table[spline_rows, 4])
+                    max_beta <- max(abs(cond_table[spline_rows, 1]))
+                    c(p_val, max_beta)
                 } else {
-                    NA_real_
+                    c(NA_real_, NA_real_)
                 }
             },
             error = function(e) {
                 # Silently catch non-convergent mathematical models into NA to protect IPC bandwidth
-                NA_real_
+                c(NA_real_, NA_real_)
             }
         )
         return(res)
     }
 
-    # Parallel map engineered to exclusively return primitive NUMERICS (eliminates OS memory pipe exhaustion globally)
-    if (requireNamespace("pbmcapply", quietly = TRUE) && .Platform$OS.type != "windows") {
-        p_vals_list <- pbmcapply::pbmclapply(pairs_list, fit_worker, mc.cores = cores)
-    } else {
-        p_vals_list <- parallel::mclapply(pairs_list, fit_worker, mc.cores = cores)
+    # Parallel map engineered to exclusively return primitive NUMERICS, structurally wrapped in rigid File-Descriptor Chunk bounds
+    chunk_size <- 2000
+    n_pairs <- length(pairs_list)
+    n_chunks <- ceiling(n_pairs / chunk_size)
+    p_vals_list <- list()
+
+    for (ch in seq_len(n_chunks)) {
+        start_idx <- (ch - 1) * chunk_size + 1
+        end_idx <- min(ch * chunk_size, n_pairs)
+        chunk_pairs <- pairs_list[start_idx:end_idx]
+
+        message(sprintf("... Processing GLMM Chunk %d of %d (Pairs %d to %d)...", ch, n_chunks, start_idx, end_idx))
+
+        if (requireNamespace("pbmcapply", quietly = TRUE) && .Platform$OS.type != "windows") {
+            chunk_pvals <- pbmcapply::pbmclapply(chunk_pairs, fit_worker, mc.cores = cores)
+        } else {
+            chunk_pvals <- parallel::mclapply(chunk_pairs, fit_worker, mc.cores = cores)
+        }
+
+        p_vals_list <- c(p_vals_list, chunk_pvals)
+        gc() # Safe pointer collection across child OS nodes natively
     }
 
-    # Structurally unlist the isolated floats without caching massive C++ models computationally
-    p_vals <- unlist(p_vals_list)
-
-    # 3. Apply Benjamini-Hochberg FDR Multiple Testing Correction
-    adj_p_vals <- p.adjust(p_vals, method = "BH")
+    # Structurally unpack the float matrix [P_Value, Max_Beta] without caching massive C++ models
+    p_vals_mat <- do.call(rbind, p_vals_list)
 
     # Initialize the target variable array
     object@events$P_Value <- rep(NA_real_, nrow(object@events))
-    object@events$Adj_P_Value <- rep(NA_real_, nrow(object@events))
+    object@events$Max_Beta <- rep(NA_real_, nrow(object@events))
 
     for (i in seq_len(nrow(candidates))) {
         geneA <- candidates$GeneA[i]
         geneB <- candidates$GeneB[i]
         idx <- which(object@events$GeneA == geneA & object@events$GeneB == geneB)
         if (length(idx) > 0) {
-            object@events$P_Value[idx[1]] <- p_vals[i]
-            object@events$Adj_P_Value[idx[1]] <- adj_p_vals[i]
+            object@events$P_Value[idx[1]] <- p_vals_mat[i, 1]
+            object@events$Max_Beta[idx[1]] <- p_vals_mat[i, 2]
         }
     }
 
