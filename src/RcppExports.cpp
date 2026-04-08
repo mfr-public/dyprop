@@ -28,8 +28,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // scan_sequences
-List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid, arma::vec epsilon_grid, double min_score);
-RcppExport SEXP _dyprop_scan_sequences(SEXP X_clrSEXP, SEXP time_vecSEXP, SEXP tau_gridSEXP, SEXP epsilon_gridSEXP, SEXP min_scoreSEXP) {
+List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid, arma::vec epsilon_grid, double min_score, double min_var_delta);
+RcppExport SEXP _dyprop_scan_sequences(SEXP X_clrSEXP, SEXP time_vecSEXP, SEXP tau_gridSEXP, SEXP epsilon_gridSEXP, SEXP min_scoreSEXP, SEXP min_var_deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -38,14 +38,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< arma::vec >::type tau_grid(tau_gridSEXP);
     Rcpp::traits::input_parameter< arma::vec >::type epsilon_grid(epsilon_gridSEXP);
     Rcpp::traits::input_parameter< double >::type min_score(min_scoreSEXP);
-    rcpp_result_gen = Rcpp::wrap(scan_sequences(X_clr, time_vec, tau_grid, epsilon_grid, min_score));
+    Rcpp::traits::input_parameter< double >::type min_var_delta(min_var_deltaSEXP);
+    rcpp_result_gen = Rcpp::wrap(scan_sequences(X_clr, time_vec, tau_grid, epsilon_grid, min_score, min_var_delta));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_dyprop_calc_metrics", (DL_FUNC) &_dyprop_calc_metrics, 6},
-    {"_dyprop_scan_sequences", (DL_FUNC) &_dyprop_scan_sequences, 5},
+    {"_dyprop_scan_sequences", (DL_FUNC) &_dyprop_scan_sequences, 6},
     {NULL, NULL, 0}
 };
 

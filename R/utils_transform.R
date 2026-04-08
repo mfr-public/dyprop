@@ -17,7 +17,7 @@ NULL
 #'
 #' @importFrom propr propr
 #' @export
-prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, ncol = 0), k = 5) {
+prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, ncol = 0), k = 5, impute_zeros = TRUE) {
     message(">>> Phase 0: Pre-processing Data...")
     message("DEBUG: Input counts dim: ", paste(dim(counts), collapse = "x"))
     message("DEBUG: Input counts range: ", paste(range(as.matrix(counts)), collapse = " - "))
@@ -30,15 +30,22 @@ prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, nco
     counts_pooled <- counts # Default fallback
 
     if (k > 0 && requireNamespace("glmpca", quietly = TRUE) && requireNamespace("FNN", quietly = TRUE)) {
-        message(">>> Step A: kNN Smoothing via GLM-PCA...")
+        message(">>> Step A: kNN Smoothing via Randomized SVD (irlba)...")
 
-        # A. Dimension Reduction (GLM-PCA)
-        # We use Poisson family to handle counts directly without log-pseudocount bias
+        # A. Dimension Reduction (Randomized SVD via irlba)
+        # Scalable Log-normalization matching Seurat standards for highly sparse matrices
         L_dim <- min(ncol(counts), 50) # Latent dimensions
         counts_pooled <- tryCatch(
             {
-                gpca <- glmpca::glmpca(counts, L = L_dim, fam = "poi")
-                X_latent <- gpca$factors
+                if (!requireNamespace("irlba", quietly = TRUE)) {
+                    stop("Package 'irlba' is required for Fast SVD kNN but not found.")
+                }
+                # Log-normalization
+                norm_counts <- log1p(as.matrix(counts))
+
+                # Fast SVD
+                svd_res <- irlba::irlba(norm_counts, nv = L_dim)
+                X_latent <- svd_res$u %*% diag(svd_res$d)
 
                 # B. Find Nearest Neighbors
                 knn_res <- FNN::get.knn(X_latent, k = k)
@@ -81,7 +88,7 @@ prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, nco
         )
     } else {
         if (k > 0) {
-            if (!requireNamespace("glmpca", quietly = TRUE)) message("Package 'glmpca' not found. Skipping kNN smoothing.")
+            if (!requireNamespace("irlba", quietly = TRUE)) message("Package 'irlba' not found. Skipping kNN smoothing.")
             if (!requireNamespace("FNN", quietly = TRUE)) message("Package 'FNN' not found. Skipping kNN smoothing.")
         } else {
             message("... Skipping kNN pooling (k=0).")
@@ -91,7 +98,7 @@ prepareComposition <- function(counts, pseudotime, design = matrix(nrow = 0, nco
 
     # 2. Imputation (Biological Zeros)
     # Check if zCompositions is available
-    if (k > 0 && requireNamespace("zCompositions", quietly = TRUE)) {
+    if (impute_zeros && k > 0 && requireNamespace("zCompositions", quietly = TRUE)) {
         # Check for zeros
         if (any(counts_pooled == 0)) {
             message(">>> Step B: Imputing zeros with zCompositions::cmultRepl (GBM)...")

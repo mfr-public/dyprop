@@ -25,17 +25,17 @@ test_that("Full dyprop workflow runs on synthetic data", {
 
     # 3. Scan Dynamics
     # Use small grid for speed and enforce Nyquist
-    dat <- scanDynamics(dat, tau_grid = seq(2, 8, by = 0.5), epsilon_grid = c(0.5, 1), cores = 1, min_score = 0.0)
+    dat <- scanDynamics(dat, tau_grid = seq(2, 8, by = 0.5), epsilon_grid = c(0.5, 1), cores = 1, min_score = 0.0, min_var_delta = 0.0)
 
     expect_true(nrow(dat@events) > 0)
-    expect_true("Score" %in% names(dat@events))
-
-    # Check if Gene1-Gene2 pair is top ranked (or close)
-    # (Given random noise, it should be decent)
+    expect_true("R2_Sigmoid" %in% names(dat@events))
+    expect_true("R2_Linear" %in% names(dat@events))
+    expect_true("Tau_Decouple" %in% names(dat@events))
 
     # 4. Classify Events
     dat <- classifyEvents(dat)
     expect_true("Event_Class" %in% names(dat@events))
+    expect_true("Confidence" %in% names(dat@events))
 
     # 5. Validate (Mock Design)
     dat@design <- data.frame(patient_id = rep(c("P1", "P2"), each = 25))
@@ -43,5 +43,5 @@ test_that("Full dyprop workflow runs on synthetic data", {
     # Try validation (might fail if glmmTMB not installed or data too noisy, so wrap in try)
     skip_if_not_installed("glmmTMB")
     dat <- validateGLMM(dat)
-    expect_true(length(dat@glmm_fits) >= 0) # Just check it ran
+    expect_true("P_Value_FDR" %in% names(dat@events)) # Just check it ran
 })

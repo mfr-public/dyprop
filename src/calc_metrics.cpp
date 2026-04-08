@@ -1,15 +1,86 @@
-// [[Rcpp::depends(RcppArmadillo)]]
-// [[Rcpp::plugins(openmp)]]
+// [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
 
 #include <RcppArmadillo.h>
+#include <RcppParallel.h>
 #include <algorithm>
 #include <cmath>
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 using namespace Rcpp;
 using namespace arma;
+using namespace RcppParallel;
+
+struct MetricsWorker : public RcppParallel::Worker {
+  const arma::mat& X_clr;
+  const arma::mat& W_t;
+  const arma::mat& Mu_X;
+  const arma::mat& Var_X;
+  const RcppParallel::RVector<int> geneA_idx;
+  const RcppParallel::RVector<int> geneB_idx;
+  double lambda_reg;
+  int batch_size;
+  int n_events;
+  int n_time;
+
+  // Output pointer to arma memory
+  arma::uword* class_id_ptr;
+
+  MetricsWorker(const arma::mat& X_clr, const arma::mat& W_t,
+                const arma::mat& Mu_X, const arma::mat& Var_X,
+                const IntegerVector& geneA_idx, const IntegerVector& geneB_idx,
+                double lambda_reg, int batch_size, int n_events, int n_time,
+                arma::uword* class_id_ptr)
+      : X_clr(X_clr), W_t(W_t), Mu_X(Mu_X), Var_X(Var_X),
+        geneA_idx(geneA_idx), geneB_idx(geneB_idx),
+        lambda_reg(lambda_reg), batch_size(batch_size),
+        n_events(n_events), n_time(n_time), class_id_ptr(class_id_ptr) {}
+
+  void operator()(std::size_t begin, std::size_t end) {
+    for (std::size_t b = begin; b < end; ++b) {
+      int start_e = b * batch_size;
+      int end_e = std::min(n_events, start_e + batch_size);
+      int K = end_e - start_e;
+
+      arma::mat lr_sq_mat(K, n_time);
+
+      for (int k = 0; k < K; ++k) {
+        int e = start_e + k;
+        int gA = geneA_idx[e] - 1;
+        int gB = geneB_idx[e] - 1;
+        lr_sq_mat.row(k) = arma::square(X_clr.row(gA) - X_clr.row(gB));
+      }
+
+      // Level 3 BLAS GEMM (Matrix-Matrix product). 
+      arma::mat E_lr_sq_mat = lr_sq_mat * W_t;
+
+      for (int k = 0; k < K; ++k) {
+        int e = start_e + k;
+        int gA = geneA_idx[e] - 1;
+        int gB = geneB_idx[e] - 1;
+
+        arma::rowvec E_lr_sq = E_lr_sq_mat.row(k);
+        arma::rowvec mu_lr = Mu_X.row(gA) - Mu_X.row(gB);
+        arma::rowvec var_lr = E_lr_sq - arma::square(mu_lr);
+
+        arma::rowvec denom = Var_X.row(gA) + Var_X.row(gB) + 1e-12; // Safety guard
+        arma::rowvec phi_vec = var_lr / (denom + lambda_reg);
+        arma::rowvec rho_vec = 1.0 - (var_lr / denom);
+
+        double max_phi = phi_vec.max();
+        double min_rho = rho_vec.min();
+
+        if (max_phi < 0.2) {
+          class_id_ptr[e] = 0; // Homeostasis
+        } else {
+          if (min_rho < 0.5) {
+            class_id_ptr[e] = 2; // Decoupling
+          } else {
+            class_id_ptr[e] = 1; // Switch
+          }
+        }
+      }
+    }
+  }
+};
 
 // [[Rcpp::export]]
 List calc_metrics(arma::mat X_clr, IntegerVector geneA_idx,
@@ -40,72 +111,12 @@ List calc_metrics(arma::mat X_clr, IntegerVector geneA_idx,
 
   int batch_size = 512;
   int n_batches = std::ceil((double)n_events / batch_size);
-  int update_interval = std::max(1, n_batches / 40);
-  int progress_counter = 0;
 
-  // Level 3 BLAS matrix batching via OpenMP
-#ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic)
-#endif
-  for (int b = 0; b < n_batches; ++b) {
-
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-    {
-      progress_counter++;
-      if (progress_counter % update_interval == 0) {
-        Rcpp::Rcout << ".";
-      }
-    }
-
-    int start_e = b * batch_size;
-    int end_e = std::min(n_events, start_e + batch_size);
-    int K = end_e - start_e;
-
-    arma::mat lr_sq_mat(K, n_time);
-
-    for (int k = 0; k < K; ++k) {
-      int e = start_e + k;
-      int gA = geneA_idx(e) - 1;
-      int gB = geneB_idx(e) - 1;
-      lr_sq_mat.row(k) = arma::square(X_clr.row(gA) - X_clr.row(gB));
-    }
-
-    // Level 3 BLAS GEMM (Matrix-Matrix product). Drastically maximizes cache
-    // reuse to skip the memory bandwidth boundary!
-    arma::mat E_lr_sq_mat = lr_sq_mat * W_t;
-
-    for (int k = 0; k < K; ++k) {
-      int e = start_e + k;
-      int gA = geneA_idx(e) - 1;
-      int gB = geneB_idx(e) - 1;
-
-      arma::rowvec E_lr_sq = E_lr_sq_mat.row(k);
-      arma::rowvec mu_lr = Mu_X.row(gA) - Mu_X.row(gB);
-      arma::rowvec var_lr = E_lr_sq - arma::square(mu_lr);
-
-      arma::rowvec denom =
-          Var_X.row(gA) + Var_X.row(gB) + 1e-12; // Safety guard
-      arma::rowvec phi_vec = var_lr / (denom + lambda_reg);
-      arma::rowvec rho_vec = 1.0 - (var_lr / denom);
-
-      double max_phi = phi_vec.max();
-      double min_rho = rho_vec.min();
-
-      if (max_phi < 0.2) {
-        class_id(e) = 0; // Homeostasis
-      } else {
-        if (min_rho < 0.5) {
-          class_id(e) = 2; // Decoupling
-        } else {
-          class_id(e) = 1; // Switch
-        }
-      }
-    }
-  }
-
-  Rcpp::Rcout << "\n";
+  // Dispatch Level 3 BLAS dynamically across available cores
+  MetricsWorker worker(X_clr, W_t, Mu_X, Var_X, geneA_idx, geneB_idx, 
+                       lambda_reg, batch_size, n_events, n_time, class_id.memptr());
+  
+  RcppParallel::parallelFor(0, n_batches, worker);
 
   return List::create(Named("Class_ID") = class_id);
 }

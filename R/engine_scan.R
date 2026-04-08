@@ -20,13 +20,15 @@ NULL
 #'  until \code{classifyEvents} is called.
 #'
 #' @importFrom Rcpp evalCpp
+#' @importFrom RcppParallel RcppParallelLibs
 #' @useDynLib dyprop, .registration = TRUE
 #' @export
 scanDynamics <- function(object,
                          tau_grid = seq(0.1, 0.9, length.out = 20),
                          epsilon_grid = c(0.05, 0.1, 0.15, 0.2),
                          cores = 1L,
-                         min_score = 0.5) {
+                         min_score = 0.5,
+                         min_var_delta = 5.0) {
   # 1. Input Validation
   if (!inherits(object, "dyprop")) stop("Input must be a 'dyprop' object.")
   if (length(object@pseudotime) == 0) stop("Pseudotime slot is empty.")
@@ -81,7 +83,8 @@ scanDynamics <- function(object,
     time_vec = object@pseudotime,
     tau_grid = tau_grid,
     epsilon_grid = epsilon_grid,
-    min_score = min_score
+    min_score = min_score,
+    min_var_delta = min_var_delta
   )
 
   # 5. Format Results
@@ -91,42 +94,34 @@ scanDynamics <- function(object,
       GeneB = character(0),
       Tau_Grid = numeric(0),
       Epsilon_Grid = numeric(0),
-      Score = numeric(0),
+      R2_Linear = numeric(0),
+      R2_Sigmoid = numeric(0),
+      Tau_Decouple = numeric(0),
+      Var_Delta = numeric(0),
       Model_Type = character(0),
-      Event_Class = character(0),
-      FDR = numeric(0),
       stringsAsFactors = FALSE
     )
     return(object)
   }
-
-  cat("DEBUG C++ RETURN LENGTHS:\n")
-  cat("GeneA_Idx:", length(results_list$GeneA_Idx), "\n")
-  cat("Score:", length(results_list$Score), "\n")
-  cat("Model_Type:", length(results_list$Model_Type), "\n")
-  cat("gene_names applied:", length(gene_names[results_list$GeneA_Idx]), "\n")
-  cat("head(GeneA_Idx):", head(results_list$GeneA_Idx), "\n")
 
   events_df <- data.frame(
     GeneA = gene_names[results_list$GeneA_Idx],
     GeneB = gene_names[results_list$GeneB_Idx],
     Tau_Grid = results_list$Tau,
     Epsilon_Grid = results_list$Epsilon,
-    Score = results_list$Score,
+    R2_Linear = results_list$R2_Linear,
+    R2_Sigmoid = results_list$R2_Sigmoid,
+    Tau_Decouple = results_list$Tau_Decouple,
+    Var_Delta = results_list$Var_Delta,
     Model_Type = ifelse(results_list$Model_Type == 1, "Logistic", "Gaussian"),
-    Event_Class = NA,
-    FDR = NA,
     stringsAsFactors = FALSE
   )
-
-  # Sort by Score (Best matches first)
-  events_df <- events_df[order(events_df$Score, decreasing = TRUE), ]
 
   # Update Object
   object@events <- events_df
   object@dictionary_meta <- list(tau = tau_grid, epsilon = epsilon_grid)
 
-  message(">>> Scan Complete. Top match score: ", round(max(events_df$Score), 2))
+  message(">>> Scan Complete. Topological candidates extracted: ", nrow(events_df))
 
   return(object)
 }
