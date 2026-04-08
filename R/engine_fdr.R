@@ -4,9 +4,9 @@ NULL
 #' Estimate False Discovery Rate (FDR)
 #'
 #' Estimates the statistical significance of detected events using an empirical Null Model.
-#' The method permutes the pseudotime vector to destroy biological signal, generates
-#' a distribution of 'null' scan scores, and calculates the False Discovery Rate (FDR)
-#' for the real events.
+#' The method applies Phase Randomization (Circular Shift) to the data matrix. This preserves
+#' the internal autocorrelation and generic non-linear drift of the biological system while
+#' mathematically decoupling the specific transition coordinates.
 #'
 #' @param object A \code{dyprop} object with populated \code{@events} slot.
 #' @param n_permutations Integer. Number of null scores to generate. Default 10,000.
@@ -29,52 +29,33 @@ estimateFDR <- function(object, n_permutations = 10000, cores = 1L) {
 
     message(">>> Phase 3.5: Estimating FDR (Empirical Null Model)...")
 
-    # 1. Create Null Object
-    # We permute pseudotime exactly once (as per docs "We permute... once")
-    # This destroys the temporal structure for all genes simultaneously.
-    # To get stable statistics, scanning a random subset of 10,000 pairs
-    # from this single permutation is usually sufficient if N_pairs is large.
-
+    # 1. Phase Randomization (Circular Shift) Object
+    # We shift the CLR matrix cyclically by 30% to preserve autocorrelation but destroy topology.
     null_object <- object
     set.seed(42) # Reproducibility
-    null_object@pseudotime <- sample(object@pseudotime)
+    
+    n_samples <- nrow(null_object@logratio)
+    shift_fraction <- 0.30
+    shift_idx <- floor(n_samples * shift_fraction)
+    
+    idx_shift <- c((shift_idx + 1):n_samples, 1:shift_idx)
+    null_object@logratio <- null_object@logratio[idx_shift, , drop = FALSE]
 
-    # 2. Run Scan on Null Object
-    # ISSUE: scanDynamics scans ALL pairs. For 10,000 genes, that's 50M pairs.
-    # Doing that just for the null is expensive if we only need 10,000 null scores.
-    # Ideally, scanDynamics would accept a 'subset' or 'n_pairs' argument.
-    # Current scanDynamics implementation scans *everything* in @logratio.
+    # 2. Tau Seam Masking
+    # The circular shift creates an artificial cliff at the wrap-around point.
+    # We punch a hole in the theoretical tau mapping grid to blind the engine to this cliff.
+    tau_grid <- object@dictionary_meta$tau
+    eps_grid <- object@dictionary_meta$epsilon
+    seam_tau <- shift_fraction
+    
+    safe_tau_grid <- tau_grid[abs(tau_grid - seam_tau) > max(eps_grid)]
+    if (length(safe_tau_grid) == 0) safe_tau_grid <- tau_grid # Fallback
 
-    # Optimization: Subset the inputs to scanDynamics to limit computation.
-    # If we only need ~10,000 null scores, we can pick a subset of genes
-    # such that n_genes choose 2 ~= 10,000.
-    # n*(n-1)/2 = 10000 => n^2 ~= 20000 => n ~= 141 genes.
-
-    n_features <- ncol(object@logratio)
-
-    if (n_features * (n_features - 1) / 2 > n_permutations) {
-        # Subset features
-        n_subset <- ceiling(sqrt(2 * n_permutations))
-        # Ensure we don't exceed actual features
-        n_subset <- min(n_subset, n_features)
-
-        # Pick random genes
-        keep_idx <- sample(seq_len(n_features), n_subset)
-
-        # Update null object to have only these genes
-        null_object@logratio <- object@logratio[, keep_idx, drop = FALSE]
-        # Also counts just in case (though scanDynamics uses logratio)
-        if (nrow(object@counts) > 0) null_object@counts <- object@counts[, keep_idx, drop = FALSE]
-
-        message("... Subsetting to ", n_subset, " random genes to generate approx ", n_permutations, " null scores.")
-    }
-
-    # Run Scan
-    # We suppress messages to avoid noise
+    # Run Scan securely avoiding the artificial cliff
     suppressMessages({
         null_object <- scanDynamics(null_object,
-            tau_grid = object@dictionary_meta$tau,
-            epsilon_grid = object@dictionary_meta$epsilon,
+            tau_grid = safe_tau_grid,
+            epsilon_grid = eps_grid,
             cores = cores
         )
     })
@@ -89,21 +70,17 @@ estimateFDR <- function(object, n_permutations = 10000, cores = 1L) {
     real_scores <- object@events$Score
     n_real <- length(real_scores)
 
-    fdrs <- numeric(n_real)
-
-    null_scores <- sort(null_scores, decreasing = TRUE)
-
-    for (i in seq_len(n_real)) {
-        s <- real_scores[i]
-
-        n_null_ge <- sum(null_scores >= s)
-
-        prop_null <- n_null_ge / n_null_pairs
-        prop_real <- i / n_real_pairs
-
-        fdr <- prop_null / prop_real
-        fdrs[i] <- min(fdr, 1.0) # Cap at 1
-    }
+    # Vectorized calculation for O(1) performance and to avoid O(N^2) loops
+    null_scores_asc <- sort(null_scores, decreasing = FALSE)
+    
+    # Calculate exact number of null scores >= s for all real scores simultaneously
+    n_null_ge_vec <- length(null_scores_asc) - findInterval(real_scores - 1e-12, null_scores_asc)
+    
+    # Inject robust + 1 pseudocount to bound the FDR when the null is totally empty
+    prop_null_vec <- (n_null_ge_vec + 1) / n_null_pairs
+    prop_real_vec <- seq_len(n_real) / n_real_pairs
+    
+    fdrs <- pmin(prop_null_vec / prop_real_vec, 1.0)
 
     # Enforce strict monotonicity (q-values representation)
     # Traverse from worst score to best score to propagate the tightest significance threshold.

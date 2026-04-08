@@ -17,10 +17,10 @@ NULL
 #' @importFrom glmmTMB glmmTMB t_family
 #' @importFrom splines ns
 #' @export
-setGeneric("validateGLMM", function(object, formula_str = NULL, max_candidates = 10000, fdr_cutoff = 0.05) standardGeneric("validateGLMM"))
+setGeneric("validateGLMM", function(object, formula_str = NULL, max_candidates = 10000, fdr_cutoff = 0.05, p_value_cutoff = 0.05, min_beta = 0.5, cores = max(1L, parallel::detectCores() - 1L)) standardGeneric("validateGLMM"))
 
 #' @rdname validateGLMM
-setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL, max_candidates = 10000, fdr_cutoff = 0.05) {
+setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL, max_candidates = 10000, fdr_cutoff = 0.05, p_value_cutoff = 0.05, min_beta = 0.5, cores = max(1L, parallel::detectCores() - 1L)) {
     if (nrow(object@events) == 0) {
         warning("No events to validate.")
         return(object)
@@ -74,8 +74,7 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL, max_can
         }
     }
 
-    cores <- getOption("mc.cores", parallel::detectCores() - 1L)
-    if (cores < 1) cores <- 1L
+    if (is.null(cores) || cores < 1) cores <- 1L
     message(sprintf(">>> Validating %d candidates with GLMM on %d cores...", nrow(candidates), cores))
 
     # Identify pairs
@@ -103,8 +102,18 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL, max_can
                 spline_rows <- grep("ns\\(pseudotime", rownames(cond_table))
 
                 if (length(spline_rows) > 0) {
-                    p_val <- min(cond_table[spline_rows, 4])
-                    max_beta <- max(abs(cond_table[spline_rows, 1]))
+                    # Extract Variance-Covariance Matrix for Conditional Model
+                    vc <- vcov(fit)$cond[spline_rows, spline_rows, drop = FALSE]
+                    beta <- cond_table[spline_rows, 1]
+                    
+                    # Compute Joint Wald Test Statistic (Chi-Square) directly mimicking ANOVA
+                    chisq_stat <- t(beta) %*% solve(vc) %*% beta
+                    df <- length(beta)
+                    
+                    # Convert to global P-value representing total trajectory variation
+                    p_val <- pchisq(as.numeric(chisq_stat), df, lower.tail = FALSE)
+                    
+                    max_beta <- max(abs(beta))
                     c(p_val, max_beta)
                 } else {
                     c(NA_real_, NA_real_)
@@ -157,6 +166,19 @@ setMethod("validateGLMM", "dyprop", function(object, formula_str = NULL, max_can
             object@events$Max_Beta[idx[1]] <- p_vals_mat[i, 2]
         }
     }
+
+    # Rigorous Multiple-Testing Correction (FDR) sequentially enforced on GLMM P-Values
+    object@events$P_Value_FDR <- rep(NA_real_, nrow(object@events))
+    
+    valid_idx <- !is.na(object@events$P_Value)
+    if (sum(valid_idx) > 0) {
+        object@events$P_Value_FDR[valid_idx] <- p.adjust(object@events$P_Value[valid_idx], method = "BH")
+    }
+
+    # Structure Dual-threshold filtering for rigorous significance and biological effect size
+    object@events <- object@events[valid_idx &
+        object@events$P_Value_FDR < fdr_cutoff &
+        abs(object@events$Max_Beta) >= min_beta, ]
 
     return(object)
 })

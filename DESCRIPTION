@@ -1,7 +1,7 @@
 Package: dyprop
 Type: Package
 Title: Dynamic Proportionality Analysis
-Version: 0.2.6
+Version: 0.2.8
 Authors@R: c(
     person("DyProp", "Team", email = "dev@dyprop.org", role = c("aut", "cre"))
   )
@@ -18,10 +18,14 @@ Imports:
     stats,
     Rcpp (>= 1.0.0),
     propr,
-    glmmTMB
+    glmmTMB,
+    parallel,
+    splines,
+    RcppParallel
 LinkingTo: 
     Rcpp,
-    RcppArmadillo
+    RcppArmadillo,
+    RcppParallel
 RoxygenNote: 7.3.2
 Suggests: 
     testthat (>= 3.0.0),
