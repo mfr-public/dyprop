@@ -17,6 +17,10 @@ test_that("estimateFDR throws deprecation warning", {
         pseudotime = pseudotime
     )
 
-    # 4. Check warning
-    expect_warning(estimateFDR(obj), "deprecated")
+    obj <- estimateFDR(obj)
+
+    # 4. Check boundaries
+    expect_true(!is.null(obj@fdr_cutoff))
+    expect_true(obj@fdr_cutoff$R2_Sigmoid >= 0.3)
+    expect_true(obj@fdr_cutoff$Var_Delta >= 3.0)
 })

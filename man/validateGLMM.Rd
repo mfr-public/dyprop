@@ -5,23 +5,32 @@
 \alias{validateGLMM,dyprop-method}
 \title{Hierarchical Validation using GLMM}
 \usage{
-validateGLMM(object, formula_str = NULL)
+validateGLMM(
+  object,
+  max_candidates = 1000,
+  p_value_cutoff = 0.05,
+  cores = max(1L, parallel::detectCores() - 1L)
+)
 
-\S4method{validateGLMM}{dyprop}(object, formula_str = NULL)
+\S4method{validateGLMM}{dyprop}(
+  object,
+  max_candidates = 1000,
+  p_value_cutoff = 0.05,
+  cores = max(1L, parallel::detectCores() - 1L)
+)
 }
 \arguments{
 \item{object}{A \code{dyprop} object with classified events.}
 
-\item{formula_str}{Character. The GLMM formula. Default:
-"y ~ splines::ns(pseudotime, df=3) + (1|patient_id)"}
+\item{max_candidates}{Integer. Top candidates to process conditionally by class. Default 1000.}
 
-\item{family}{The glmmTMB family. Default: \code{glmmTMB::t_family()}.}
+\item{p_value_cutoff}{Numeric. Final BH-adjusted significance threshold. Default 0.05.}
 }
 \value{
-A \code{dyprop} object with populated \code{@glmm_fits} slot.
+A \code{dyprop} object with populated \code{@events$P_Value_FDR}.
 }
 \description{
-Fits a Generalized Linear Mixed Model (GLMM) to significant gene pairs to
-distinguish between true phase transitions and random condition/patient effects.
-Uses glmmTMB to model heteroscedasticity and heavy-tailed residuals (t-distribution).
+Fits a series of Generalized Linear Mixed Models (GLMM) via glmmTMB natively 
+mapping to the Topological Vector Paradigm. Natively executes dynamic Likelihood
+Ratio Tests routing splines, linear models, and variance break constraints.
 }

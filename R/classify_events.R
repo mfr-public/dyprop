@@ -26,11 +26,23 @@ setMethod("classifyEvents", "dyprop", function(object) {
 
     events <- object@events
 
-    # Execute deterministic categorization using the Topological Vector Paradigm
+    # Extract Empirical Null Bound arrays safely
+    if (length(object@fdr_cutoff) == 0) {
+        warning("No empirical FDR cutoffs found. Run estimateFDR() securely first. Utilizing extremely conservative default bounds.", call. = FALSE)
+        r2_cut <- 0.5
+        var_cut <- 5.0
+        lin_cut <- 0.5
+    } else {
+        r2_cut <- object@fdr_cutoff$R2_Sigmoid
+        var_cut <- object@fdr_cutoff$Var_Delta
+        lin_cut <- object@fdr_cutoff$R2_Linear
+    }
+
+    # Execute deterministic categorization using the Topological Vector Paradigm natively scaled to FDR
     classifications <- dplyr::case_when(
-        events$Var_Delta >= 5.0 ~ "Decoupling",
-        events$R2_Sigmoid >= 0.5 & events$R2_Sigmoid > (1.1 * events$R2_Linear) & events$Epsilon_Grid < 0.15 ~ "Phase_Transition",
-        events$R2_Linear >= 0.5 | (events$R2_Sigmoid >= 0.5 & events$Epsilon_Grid >= 0.15) ~ "Smooth_Drift",
+        events$Var_Delta >= var_cut ~ "Decoupling",
+        events$R2_Sigmoid >= r2_cut & events$R2_Sigmoid > (1.1 * events$R2_Linear) & events$Epsilon_Grid < 0.15 ~ "Phase_Transition",
+        events$R2_Linear >= lin_cut | (events$R2_Sigmoid >= r2_cut & events$Epsilon_Grid >= 0.15) ~ "Smooth_Drift",
         TRUE ~ "Homeostasis"
     )
 

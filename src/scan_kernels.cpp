@@ -44,6 +44,43 @@ void winsorize_and_zscore(arma::rowvec &y) {
 }
 
 // -----------------------------------------------------------------------------
+// HELPER: Bicor Standardization (L2 Normalized robust weights)
+// -----------------------------------------------------------------------------
+inline arma::rowvec compute_bicor_zscore(const arma::rowvec& y) {
+    int n = y.n_elem;
+    
+    // 1. Calculate Median and MAD
+    double med = arma::median(y);
+    arma::rowvec abs_dev = arma::abs(y - med);
+    double mad = arma::median(abs_dev);
+    
+    if (mad == 0.0) mad = 1e-8; 
+    
+    // 2. Calculate the Biweights
+    arma::rowvec u = (y - med) / (9.0 * mad);
+    arma::rowvec weights = arma::zeros<arma::rowvec>(n);
+    
+    for(int i = 0; i < n; ++i) {
+        if (std::abs(u[i]) < 1.0) {
+            double one_minus_u2 = 1.0 - (u[i] * u[i]);
+            weights[i] = one_minus_u2 * one_minus_u2; // (1 - u^2)^2
+        } else {
+            weights[i] = 0.0;
+        }
+    }
+    
+    // 3. Transform to Topological Projection
+    arma::rowvec y_centered_weighted = (y - med) % weights;
+    
+    // 4. L2 Normalization (incorporates n-1 natively)
+    double sum_sq = arma::sum(arma::square(y_centered_weighted));
+    
+    if (sum_sq < 1e-12) return arma::zeros<arma::rowvec>(n);
+    
+    return y_centered_weighted / std::sqrt(sum_sq);
+}
+
+// -----------------------------------------------------------------------------
 // HELPER: Generalized Logistic Function (Switch)
 // -----------------------------------------------------------------------------
 arma::rowvec logistic_curve(const arma::vec &t, double tau, double epsilon) {
@@ -82,6 +119,7 @@ struct ScanWorker : public RcppParallel::Worker {
   const std::vector<int> &meta_type;
   double min_score;
   double min_var_delta;
+  int method;
   int n_genes;
   int n_time;
   int n_archetypes;
@@ -101,7 +139,7 @@ struct ScanWorker : public RcppParallel::Worker {
              const arma::vec &tau_grid, const arma::vec &epsilon_grid,
              const arma::vec &meta_tau, const arma::vec &meta_eps,
              const std::vector<int> &meta_type, double min_score, double min_var_delta,
-             int n_genes, int n_time, int n_archetypes,
+             int method, int n_genes, int n_time, int n_archetypes,
              std::vector<std::vector<int>> &res_gene1,
              std::vector<std::vector<int>> &res_gene2,
              std::vector<std::vector<double>> &res_tau,
@@ -113,7 +151,7 @@ struct ScanWorker : public RcppParallel::Worker {
              std::vector<std::vector<int>> &res_type)
       : X_clr(X_clr), M(M), time_vec_z(time_vec_z), tau_grid(tau_grid), epsilon_grid(epsilon_grid),
         meta_tau(meta_tau), meta_eps(meta_eps), meta_type(meta_type),
-        min_score(min_score), min_var_delta(min_var_delta), n_genes(n_genes), 
+        min_score(min_score), min_var_delta(min_var_delta), method(method), n_genes(n_genes), 
         n_time(n_time), n_archetypes(n_archetypes), res_gene1(res_gene1), 
         res_gene2(res_gene2), res_tau(res_tau), res_eps(res_eps), 
         res_r2_lin(res_r2_lin), res_r2_sig(res_r2_sig), res_tau_dec(res_tau_dec), 
@@ -122,11 +160,21 @@ struct ScanWorker : public RcppParallel::Worker {
   void operator()(std::size_t begin, std::size_t end) {
     for (std::size_t i = begin; i < end; ++i) {
       for (int j = i + 1; j < n_genes; ++j) {
-        arma::rowvec y = X_clr.row(i) - X_clr.row(j);
-        winsorize_and_zscore(y);
+        arma::rowvec y_raw = X_clr.row(i) - X_clr.row(j);
+        
+        // Z-score strictly isolated for Var_Delta decoupling physics
+        arma::rowvec y_z = y_raw;
+        winsorize_and_zscore(y_z);
+        
+        arma::rowvec y_processed;
+        if (method == 1) {
+            y_processed = compute_bicor_zscore(y_raw);
+        } else {
+            y_processed = y_z / std::sqrt(n_time - 1.0); // L2 transform for dot product
+        }
 
-        // 1. Phase Transition fit (Sigmoid)
-        arma::vec cor = (M * y.t()) / (n_time - 1.0);
+        // 1. Phase Transition fit (Sigmoid) via strict L2 dot product correlation
+        arma::vec cor = (M * y_processed.t());
         arma::uword best_idx = 0;
         double best_val = -1.0;
         for (arma::uword k = 0; k < cor.n_elem; ++k) {
@@ -139,15 +187,16 @@ struct ScanWorker : public RcppParallel::Worker {
         double r2_sigmoid = best_val * best_val;
         
         // 2. Linear Drift fit (Line)
-        double r_lin = arma::dot(y, time_vec_z) / (n_time - 1.0);
+        double r_lin = arma::dot(y_processed, time_vec_z);
         double r2_linear = r_lin * r_lin;
 
         // 3. O(1) Decoupling Math (Variance Explosion/Collapse)
+        // Strictly uses raw, continuous variance arrays (y_z) mapped chronologically
         std::vector<double> cumsum_y(n_time + 1, 0.0);
         std::vector<double> cumsum_y2(n_time + 1, 0.0);
         for (int k = 0; k < n_time; ++k) {
-            cumsum_y[k+1] = cumsum_y[k] + y[k];
-            cumsum_y2[k+1] = cumsum_y2[k] + y[k] * y[k];
+            cumsum_y[k+1] = cumsum_y[k] + y_z[k];
+            cumsum_y2[k+1] = cumsum_y2[k] + y_z[k] * y_z[k];
         }
         
         double max_var_delta = 0.0;
@@ -221,19 +270,26 @@ struct ScanWorker : public RcppParallel::Worker {
 // -----------------------------------------------------------------------------
 // [[Rcpp::export]]
 List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid,
-                    arma::vec epsilon_grid, double min_score = 0.5, double min_var_delta = 5.0) {
+                    arma::vec epsilon_grid, double min_score = 0.5, double min_var_delta = 5.0,
+                    int method = 0) {
 
   int n_genes = X_clr.n_rows;
   int n_time = X_clr.n_cols;
 
-  // Standardization of the linear target 
-  arma::vec time_vec_z = time_vec;
-  double t_mu = arma::mean(time_vec_z);
-  double t_sig = arma::stddev(time_vec_z);
-  if (t_sig > 1e-12) {
-      time_vec_z = (time_vec_z - t_mu) / t_sig;
+  // Standardization of the linear target explicitly locked to regression method
+  arma::vec time_vec_z;
+  if (method == 1) {
+      time_vec_z = compute_bicor_zscore(time_vec.t()).t();
   } else {
-      time_vec_z.zeros();
+      time_vec_z = time_vec;
+      double t_mu = arma::mean(time_vec_z);
+      double t_sig = arma::stddev(time_vec_z);
+      if (t_sig > 1e-12) {
+          time_vec_z = (time_vec_z - t_mu) / t_sig;
+      } else {
+          time_vec_z.zeros();
+      }
+      time_vec_z = time_vec_z / std::sqrt(n_time - 1.0); // Standardize to L2 Pearson
   }
 
   int n_tau = tau_grid.n_elem;
@@ -263,11 +319,17 @@ List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid,
   }
 
   for (int i = 0; i < M.n_rows; ++i) {
-    arma::rowvec r = M.row(i);
-    double mu = arma::mean(r);
-    double sigma = arma::stddev(r);
-    if (sigma > 1e-12)
-      M.row(i) = (r - mu) / sigma;
+    if (method == 1) {
+        M.row(i) = compute_bicor_zscore(M.row(i));
+    } else {
+        arma::rowvec r = M.row(i);
+        double mu = arma::mean(r);
+        double sigma = arma::stddev(r);
+        if (sigma > 1e-12) {
+          M.row(i) = (r - mu) / sigma;
+        }
+        M.row(i) = M.row(i) / std::sqrt(n_time - 1.0); // Standardize to L2 Pearson
+    }
   }
 
   std::vector<std::vector<int>> res_gene1(n_genes);
@@ -283,7 +345,7 @@ List scan_sequences(arma::mat X_clr, arma::vec time_vec, arma::vec tau_grid,
   std::vector<std::vector<int>> res_type(n_genes);
 
   ScanWorker worker(X_clr, M, time_vec_z, tau_grid, epsilon_grid, meta_tau, meta_eps,
-                    meta_type, min_score, min_var_delta, n_genes, n_time, n_archetypes,
+                    meta_type, min_score, min_var_delta, method, n_genes, n_time, n_archetypes,
                     res_gene1, res_gene2, res_tau, res_eps, 
                     res_r2_lin, res_r2_sig, res_tau_dec, res_var_delta, res_type);
 

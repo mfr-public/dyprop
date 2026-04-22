@@ -1,0 +1,27 @@
+# R History and Environment
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Ruserdata
+.Renviron
+
+# RStudio
+.Rproj.user/
+
+# OS/System generated
+.DS_Store
+*.swp
+
+# C++ Compiled Binaries
+src/*.o
+src/*.so
+src/*.dll
+
+# Build Artifacts
+/*.tar.gz
+/*.Rcheck/
+
+# Project Specific
+paper_reproducibility/output/*.rds
+*.log

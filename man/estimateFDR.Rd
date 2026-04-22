@@ -4,27 +4,21 @@
 \alias{estimateFDR}
 \title{Estimate False Discovery Rate (FDR)}
 \usage{
-estimateFDR(object, n_permutations = 10000, cores = 1L)
+estimateFDR(object, ...)
 }
 \arguments{
-\item{object}{A \code{dyprop} object with populated \code{@events} slot.}
+\item{object}{A \code{dyprop} object.}
 
-\item{n_permutations}{Integer. Number of null scores to generate. Default 10,000.
-Note: This is not the number of *full* permutations, but the total number of
-null pairs derived from one or more shuffled scans.}
-
-\item{cores}{Integer. Number of cores for parallel scanning. Default 1.}
+\item{...}{Additional arguments (ignored).}
 }
 \value{
-A \code{dyprop} object with updated \code{@events$FDR} column.
+The original \code{dyprop} object without modification.
 }
 \description{
-Estimates the statistical significance of detected events using an empirical Null Model.
-The method permutes the pseudotime vector to destroy biological signal, generates
-a distribution of 'null' scan scores, and calculates the False Discovery Rate (FDR)
-for the real events.
-}
-\details{
-The FDR is calculated as:
-\eqn{FDR(s) = \frac{\text{Proportion of Null Scores } \ge s}{\text{Proportion of Real Scores } \ge s}}
+`r lifecycle::badge("deprecated")`
+
+This function was deprecated in dyprop v0.3.0. The "Topological Vector Paradigm"
+introduced analytical likelihood tests (LRT) via Generalized Linear Mixed Models (GLMMs)
+to formally compute statistical significance, making empirical null permutation distributions
+(Circular Phase Shifts) mathematically obsolete and computationally redundant.
 }

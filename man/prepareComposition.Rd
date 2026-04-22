@@ -8,7 +8,8 @@ prepareComposition(
   counts,
   pseudotime,
   design = matrix(nrow = 0, ncol = 0),
-  k = 5
+  k = 5,
+  impute_zeros = TRUE
 )
 }
 \arguments{

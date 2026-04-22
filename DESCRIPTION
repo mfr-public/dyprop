@@ -1,7 +1,7 @@
 Package: dyprop
 Type: Package
 Title: Dynamic Proportionality Analysis
-Version: 0.3.0
+Version: 0.3.2
 Authors@R: c(
     person("DyProp", "Team", email = "dev@dyprop.org", role = c("aut", "cre"))
   )

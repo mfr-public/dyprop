@@ -5,22 +5,19 @@
 \alias{classifyEvents,dyprop-method}
 \title{Classify Dynamic Events}
 \usage{
-classifyEvents(object, lambda = 1e-05)
+classifyEvents(object)
 
-\S4method{classifyEvents}{dyprop}(object, lambda = 1e-05)
+\S4method{classifyEvents}{dyprop}(object)
 }
 \arguments{
 \item{object}{A \code{dyprop} object with populated \code{@events} slot.}
-
-\item{lambda}{Numeric. Regularization constant for Phi calculation. Default 1e-5.}
 }
 \value{
-A \code{dyprop} object with updated \code{@events$Event_Class} and
- populated \code{@Phi_Array} and \code{@Rho_Array} (sparse/selective population).
+A \code{dyprop} object with updated \code{@events$Event_Class} and 
+\code{@events$Confidence} columns.
 }
 \description{
-Applies a multi-evidence decision tree to distinguish between stoichiometric switches
-(Type 1) and network decoupling (Type 2). This method performs "Lazy Evaluation,"
-calculating the computationally expensive Phi and Rho metrics only for the
-significant candidates identified in the scanning phase.
+Applies a deterministic, multi-evidence decision tree to logically map the
+geometrical outputs of Phase 1 (R2_Linear, R2_Sigmoid, Var_Delta) into rigid
+biological topologies (Phase_Transition, Smooth_Drift, Decoupling).
 }

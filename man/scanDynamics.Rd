@@ -8,23 +8,25 @@ scanDynamics(
   object,
   tau_grid = seq(0.1, 0.9, length.out = 20),
   epsilon_grid = c(0.05, 0.1, 0.15, 0.2),
-  cores = 1L
+  cores = 1L,
+  min_score = 0.5,
+  min_var_delta = 5
 )
 }
 \arguments{
 \item{object}{A \code{dyprop} object containing the CLR-transformed data.}
 
-\item{tau_grid}{Numeric vector. The grid of tipping points (fraction of pseudotime) to scan. 
+\item{tau_grid}{Numeric vector. The grid of tipping points (fraction of pseudotime) to scan.
 Defaults to seq(0.1, 0.9, length.out=20).}
 
-\item{epsilon_grid}{Numeric vector. The grid of transition sharpness values. 
+\item{epsilon_grid}{Numeric vector. The grid of transition sharpness values.
 Defaults to c(0.05, 0.1, 0.15, 0.2).}
 
-\item{cores}{Integer. Number of CPU cores to use for parallel processing. 
+\item{cores}{Integer. Number of CPU cores to use for parallel processing.
 Defaults to 1 (or allow OpenMP to auto-detect).}
 }
 \value{
-A \code{dyprop} object with the \code{events} slot populated. 
+A \code{dyprop} object with the \code{events} slot populated.
  The \code{Phi_Array} and \code{Rho_Array} slots are left empty (Lazy Evaluation)
  until \code{classifyEvents} is called.
 }

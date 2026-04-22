@@ -29,14 +29,16 @@ setClass(
     metric_cache = "environment",
     events = "data.frame",
     glmm_fits = "list",
-    dictionary_meta = "list"
+    dictionary_meta = "list",
+    fdr_cutoff = "list"
   ),
   prototype = list(
     pseudotime = numeric(0),
     design = data.frame(),
     events = data.frame(),
     glmm_fits = list(),
-    dictionary_meta = list()
+    dictionary_meta = list(),
+    fdr_cutoff = list()
   )
 )
 

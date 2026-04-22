@@ -5,7 +5,7 @@ calc_metrics <- function(X_clr, geneA_idx, geneB_idx, pseudotime, h_opt, lambda_
     .Call(`_dyprop_calc_metrics`, X_clr, geneA_idx, geneB_idx, pseudotime, h_opt, lambda_reg)
 }
 
-scan_sequences <- function(X_clr, time_vec, tau_grid, epsilon_grid, min_score = 0.5, min_var_delta = 5.0) {
-    .Call(`_dyprop_scan_sequences`, X_clr, time_vec, tau_grid, epsilon_grid, min_score, min_var_delta)
+scan_sequences <- function(X_clr, time_vec, tau_grid, epsilon_grid, min_score = 0.5, min_var_delta = 5.0, method = 0L) {
+    .Call(`_dyprop_scan_sequences`, X_clr, time_vec, tau_grid, epsilon_grid, min_score, min_var_delta, method)
 }
 

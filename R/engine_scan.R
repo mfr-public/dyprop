@@ -28,8 +28,11 @@ scanDynamics <- function(object,
                          epsilon_grid = c(0.05, 0.1, 0.15, 0.2),
                          cores = 1L,
                          min_score = 0.5,
-                         min_var_delta = 5.0) {
+                         min_var_delta = 5.0,
+                         method = c("pearson", "bicor")) {
   # 1. Input Validation
+  method_idx <- match.arg(method)
+  method_int <- ifelse(method_idx == "bicor", 1L, 0L)
   if (!inherits(object, "dyprop")) stop("Input must be a 'dyprop' object.")
   if (length(object@pseudotime) == 0) stop("Pseudotime slot is empty.")
 
@@ -84,7 +87,8 @@ scanDynamics <- function(object,
     tau_grid = tau_grid,
     epsilon_grid = epsilon_grid,
     min_score = min_score,
-    min_var_delta = min_var_delta
+    min_var_delta = min_var_delta,
+    method = method_int
   )
 
   # 5. Format Results

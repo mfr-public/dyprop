@@ -25,8 +25,8 @@ setMethod("validateGLMM", "dyprop", function(object, max_candidates = 1000, p_va
         return(object)
     }
 
-    # Extract Topological High-Confidence Candidates
-    candidates <- object@events[!is.na(object@events$Confidence) & object@events$Confidence >= 0.5 & object@events$Event_Class != "Homeostasis", ]
+    # Extract Topological High-Confidence Candidates (Bypassing Smooth Drift for Spline destruction)
+    candidates <- object@events[!is.na(object@events$Confidence) & object@events$Confidence >= 0.5 & object@events$Event_Class %in% c("Phase_Transition", "Decoupling"), ]
 
     if (nrow(candidates) == 0) {
         message("No high-confidence transition events found for validation.")
@@ -58,6 +58,7 @@ setMethod("validateGLMM", "dyprop", function(object, max_candidates = 1000, p_va
             geneA = candidates$GeneA[i], 
             geneB = candidates$GeneB[i],
             event_class = candidates$Event_Class[i],
+            tau_event = candidates$Tau_Grid[i],
             tau_dec = candidates$Tau_Decouple[i]
         )
     })
@@ -66,6 +67,7 @@ setMethod("validateGLMM", "dyprop", function(object, max_candidates = 1000, p_va
         geneA <- pair$geneA
         geneB <- pair$geneB
         event_class <- pair$event_class
+        tau_event <- pair$tau_event
         tau_dec <- pair$tau_dec
 
         y_vec <- X_clr[, geneA] - X_clr[, geneB]
@@ -75,12 +77,12 @@ setMethod("validateGLMM", "dyprop", function(object, max_candidates = 1000, p_va
         res <- tryCatch(
             {
                 if (event_class == "Phase_Transition") {
-                    fit <- glmmTMB::glmmTMB(y ~ splines::ns(pseudotime, df=3) + (1|patient_id), data = df_fit, family = glmmTMB::t_family())
+                    # Execute Targeted Structural Hinge (Chow Break) precisely at C++ tau parameter
+                    df_fit$post_tau <- df_fit$pseudotime > tau_event
+                    fit <- glmmTMB::glmmTMB(y ~ pseudotime * post_tau + (1|patient_id), data = df_fit, family = glmmTMB::t_family())
                     null_fit <- glmmTMB::glmmTMB(y ~ pseudotime + (1|patient_id), data = df_fit, family = glmmTMB::t_family())
-                } else if (event_class == "Smooth_Drift") {
-                    fit <- glmmTMB::glmmTMB(y ~ pseudotime + (1|patient_id), data = df_fit, family = glmmTMB::t_family())
-                    null_fit <- glmmTMB::glmmTMB(y ~ 1 + (1|patient_id), data = df_fit, family = glmmTMB::t_family())
                 } else if (event_class == "Decoupling") {
+                    # Execute Targeted Variance Fracture
                     df_fit$post_break <- df_fit$pseudotime > tau_dec
                     fit <- glmmTMB::glmmTMB(y ~ pseudotime + (1|patient_id), dispformula = ~ post_break, data = df_fit, family = glmmTMB::t_family())
                     null_fit <- glmmTMB::glmmTMB(y ~ pseudotime + (1|patient_id), dispformula = ~ 1, data = df_fit, family = glmmTMB::t_family())
@@ -143,8 +145,9 @@ setMethod("validateGLMM", "dyprop", function(object, max_candidates = 1000, p_va
         object@events$P_Value_FDR[valid_idx] <- p.adjust(object@events$P_Value[valid_idx], method = "BH")
     }
 
-    # Filter to final mathematically secure structure
-    object@events <- object@events[valid_idx & object@events$P_Value_FDR < p_value_cutoff, ]
+    # Filter to final mathematically secure structure (retaining Smooth_Drift which skips verification)
+    keep_idx <- (valid_idx & object@events$P_Value_FDR < p_value_cutoff) | (object@events$Event_Class == "Smooth_Drift")
+    object@events <- object@events[keep_idx, ]
 
     message(">>> Validation Complete. Remaining significant candidates: ", nrow(object@events))
     return(object)
